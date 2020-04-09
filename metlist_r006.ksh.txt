@@ -1,0 +1,2246 @@
+#!/bin/ksh
+
+######################################################################################## (METLIST Utility) #########################################################################################
+#                                                                                                                                                                                                  #
+#           Name:  metlist_r006.ksh.txt          {Modified: 11/26/19, Created: 07/06/16, Author: Bill Nunn}                                                                                        #
+#                                                                                                                                                                                                  #
+#       Overview:  METLIST is supported on physical RHEL servers running native multipath provisioned with VMAX block storage. EMC SYMCLI support is described below.                              #
+#                  Utility streamlines SRDF Metro non-disruptive LUN granular migrations for any "source/target" SRDF pair within a metro area (~ <= "100km/5ms RT").                              #
+#                  Tool supports a variety of CLI "option/parm" CoReq dependencies for producing desired output files described below.  Utility CLI option summary:                                #
+#                                                                                                                                                                                                  #
+#                       - VMAX "Source/Target" ACLX masking DB backups       {option: "-a", output: /var/symcli/backups/aclxdb_<sn_[src|tgt]=>_<timestamp>[_<suf=>]}                               #
+#                       - VMAX <SN_[src|tgt]> "int/ext" LUNID tables         {option: "-l", output: [/tmp|<dir=>]/<lun_tbl_[src|tgt]>_<sn_[src|tgt]>[_<suf=>]}                                     #
+#                       - RHEL native "multipath -ll" raw data file          {option: "-m", output: [/tmp|<dir=>]/multipath_$(hostname)[_<suf=>]}                                                  #
+#                       - VMAX "Source" NAA "external" LUNID migr_list       {option: "-n", output: [/tmp|<dir=>]/<naa_ext_src>_<sn_src>[_<suf=>}                                                  #
+#                       - RHEL native "multipath -ll" "LUN/path" report      {option: "-p", output: [/tmp|<dir=>]/paths_report_$(hostname)[<suf=>}                                                 #
+#                       - RHEL <sd> "off/del" syntax, "naa_ext_src" list     {option: "-r", output: [/tmp|<dir=>]/run_[1st|2nd]_sd_[off|del]_src_<sn_src>[_<suf>]                                  #
+#                       - RHEL [v]HBA LUN discovery scan  syntax             {option: "-s", output: [/tmp|<dir=>]/scan_host_fc_$(hostname)[<suf=>]}                                                #
+#                                                                                                                                                                                                  #
+#     Repository: https://github.com/bluenunn/Toolchest/                                                                                                                                           #
+#                                                                                                                                                                                                  #
+#         Syntax:  ./metlist [-adelmnprst] [<metlist parms>]     # {Recommend "The Easy Way" described below}                                                                                      #
+#                              ::::::::::                                                                                                                                                          #
+#        Options:              ::::::::::---("-t": "temporary" - Optional, ${tmp}_... ("/tmp/mettmp_...") work files are not removed at the end of execution.)                                     #
+#                              :::::::::----("-s": "scan"      - Optional, returns host [v]HBA scan syntax for target migration LUN SCSI <sd>s being added to host.)                               #
+#                              ::::::::-----("-r": "remove"    - Optional, create source <sd> "offline/delete" syntax & <naa_ext_src> (source VMAX "external" LUNID list).)                        #
+#                              :::::::------("-p": "paths"     - Optional, create RHEL native "multipath -ll" "LUN/Path" "Summary/Details" report, CoReqs: "...multi...", "...naa_ext_src...".)    #
+#                              ::::::-------("-n": "naa_ext"   - Optional, create Source VMAX NAA (Network Address Authority) "external" LUNID migr_list (1 col, 16 bytes: x'6000097...').         #
+#                              :::::--------("-m": "multipath" - Optional, create RHEL host raw native "multipath -ll" file.)                                                                      #
+#                              ::::---------("-l": "lun_tbl"   - Optional, create "Source/Target" VMAX "internal/external" LUNID table(s).  CoReq(s): SYMCLI, sn_src=<sn_src>, [sn_tgt=<sn_tgt>])  #
+#                              :::----------("-e": "enchilada" - Optional, enable "-adlmnps" options, "-ert" ("whole enchilada") adds "-r" ("remove") & "-t" ("temporary") options to "-e".)       #
+#                              ::-----------("-d": "discover"  - Optional, perform EMC VMAX Solutions Enabler "symcfg discover" command on host being audited.)                                    #
+#                              :------------("-a": "aclx_bkup" - Optional, backup VMAX ACLX (Access Control LogiX) masking DB, CoReqs: SYMCLI host, >=1 of "sn_[src|tgt]=" parm(s).)               #
+#                                                                                                                                                                                                  #
+#          Parms:   [scenario="<desc>"]  - Optional, SRDF Metro migration description, if it includes spaces or tabs, enclose in double quotes (ex: scenario="Oracle CFNPROD migration").          #
+#                                                                                                                                                                                                  #
+#                                                                                                                                                                                                  #
+#                   [multi=<file>]       - Optional, SRDF Metro migration RHEL native "multipath -ll" output file, "-r" input CoReq: "-m" option OR "multi=<externally created import file>"       #
+#                                          "<file>" based parms are staged in "dir=<dir>" (default: "/tmp/") & have "suf=<suffix>" (if set) appended to file name (example below in notes).        #
+#                                                                                                                                                                                                  #
+#                   [pairs=<file>]       - Optional, SRDF Metro migration "source/target" <Symdev> pairs input file (format: "<Symdev_src> <Symdev_tgt>", comments allowed, sample below).         #
+#                                          "<file>" based parms are staged in "dir=<dir>" (default: "/tmp/") & have "suf=<suffix>" (if set) appended to file name (example below in notes).        #
+#                                                                                                                                                                                                  #
+#                   [sn_src=<000...>]    - Optional, SRDF Metro migration "source" VMAX full 12 digit <SN> ("000...")                                                                              #
+#                   [sn_tgt=<000...>]    - Optional, SRDF Metro migration "target" VMAX full 12 digit <SN> ("000...")                                                                              #
+#                                                                                                                                                                                                  #
+#                   [rdfg_src=<##>]      - Optional (future), SRDF Metro migration "source" VMAX RDFG (Remote Data Facility Group) <##>                                                            #
+#                   [rdfg_tgt=<##>]      - Optional (future), SRDF Metro migration "target" VMAX RDFG (Remote Data Facility Group) <##>                                                            #
+#                                                                                                                                                                                                  #
+#                   [lun_tbl_src=<file>] - Optional, SRDF Metro migration Source <Symdev> "internal/external" LUNID relationships table, CoReqs: SYMCLI host, "sn_src=" parms.                     #
+#                                          Use "lun_tbl_src=", "pairs=", "sn_src=", "multi=" parm files & "-r" option to create Source Symdev <sd> SCSI device "offline/delete" syntax.            #
+#                                          "-r" input "<parm>=" data must be captured prior to host scan for Target Symdev <sd> SCSI devices (just before target <sd> scan is recommended).        #
+#                                          "<file>" based parms are staged in "dir=<dir>" (default: "/tmp/") & have "suf=<suffix>" (if set) appended to file name (example below in notes).        #
+#                                          If CLI "lun_tbl_src=" parm is set & CLI "-l" option is not set ("$opt_l=0"), utlility looks for "import" file in "[${dir}|/tmp/]${lun_tbl_src}".        #
+#                                          If CLI "lun_tbl_src=" parm is set & CLI "-l" option is set ("$opt_l=1"), utlility creates "output" file in "[${dir}|/tmp/]${lun_tbl_src}[${suf}]".      #
+#                                                                                                                                                                                                  #
+#                   [lun_tbl_tgt=<file>] - Optional, SRDF Metro migration Target <Symdev> "internal/external" LUNID relationships table, CoReqs: SYMCLI host, "sn_tgt=" parms.                     #
+#                                          "<file>" based parms are staged in "dir=<dir>" (default: "/tmp/") & have "suf=<suffix>" (if set) appended to file name (example below in notes).        #
+#                                          If CLI "lun_tbl_tgt=" parm is set & CLI "-l" option is not set ("$opt_l=0"), utlility looks for "import" file in "[${dir}|/tmp/]${lun_tbl_tgt}".        #
+#                                          If CLI "lun_tbl_tgt=" parm is set & CLI "-l" option is set ("$opt_l=1"), utlility creates "output" file in "[${dir}|/tmp/]${lun_tbl_tgt}[${suf}]".      #
+#                                                                                                                                                                                                  #
+#                   [naa_ext_src=<file>] - Optional, SRDF Metro migration Source <Symdev> external LUNID list (1 column, 16 bytes), pre stage prior to audit (DS: "./asmlist -d" content).         #
+#                                          Use naa_ext_src= (Source SN external LUNIDs), "multi=" parms & "-r" option to create Source Symdev <sd> SCSI device "offline/delete" syntax.            #
+#                                          "-r" input "<parm>=" data must be captured prior to host scan for Target Symdev <sd> SCSI devices (just before target <sd> scan is recommended).        #
+#                                          "<file>" based parms are staged in "dir=<dir>" (default: "/tmp/") & have "suf=<suffix>" (if set) appended to file name (example below in notes).        #
+#                                          If CLI "naa_ext_src=" parm is not set, utility attempts to create a local Source SN external LUNID list in "[${dir}|/tmp/]naa_ext_src[${suf}]"          #
+#                                          if valid CLI "pairs=" & "sn_src=" parms are set and "lun_tbl_src=" parm or option "-l" (lun_tbl) is specified for the run.                              #
+#                                          If CLI "naa_ext_src=" parm is set, utlility looks for "import" file in "[${dir}]${naa_ext_src}[${suf}]".                                                #
+#                                                                                                                                                                                                  #
+#                   [dir=<migr_dir>]     - Optional, preexisting SRDF Metro migration staging directory (default: "/tmp" if "dir=<dir>" parm is not specified.).  Utility prefixes all CLI         #
+#                                          <parm>=<file> parms with "$dir" (ex: "${dir}/${multi}[_${suf}) unless dir level pathing is explicitly set in parm (ex: "multi=/tmp/multi-ll_pre").      #
+#                                          If utility needs to exit prematurely due to error condition, "dir=<migr_dir>" parm may not be sued.                                                     #
+#                                                                                                                                                                                                  #
+#                   [suf=<migr_suf>      - Optional, "suf=" parm is only appended to output files ("$outputs") created during run with one or more of CLI "-aelmprs" options.  "suf=" parm         #
+#                                          is not appended to pre staged import files.  If utility needs to exit prematurely due to error condition, "suf=<migr_suf>" parm may not be used.        #
+#                                                                                                                                                                                                  #
+#        Sample METLIST SRDF Metro Migration Variables:         # {Define on each SRDF Metro "SAN_Mgr/Migr_Host"}                                                                                  #
+#                                                                                                                                                                                                  #
+#             scenario="host_team_demo"                         # {Tailor scenario="<migration descriptor>" (no embedded blanks if $scenario used to define other migr_vars)}                      #
+#             pairs="srdf_metro_01755_01695_demo_pairs"         # {Tailor $pairs if desired}                                                                                                       #
+#             migr_dir="/users/bnunn/srdf_metro/demo"           # {Tailor as desired (if "/tmp", save "...pre/" files somewhere safe for later use.)}                                              #
+#             sn_src=000196801755                               # {Tailor full 12 digit migration source VMAX <SN>: "000..."}                                                                      #
+#             sn_tgt=000196801695                               # {Tailor full 12 digit migration target VMAX <SN>: "000..."}                                                                      #
+#             rdfg_src=80                                       # {Tailor local  migration source VMAX RDFG (Remote Data Facility Group)}                                                          #
+#             rdfg_tgt=80                                       # {Tailor remote migration target VMAX RDFG (Remote Data Facility Group)}                                                          #
+#                                                                                                                                                                                                  #
+#             parms_src="sn_src=$sn_src rdfg_src=$rdfg_src"     # {Source VMAX parms}                                                                                                              #
+#             parms_tgt="sn_tgt=$sn_tgt rdfg_tgt=$rdfg_tgt"     # {Target VMAX parms}                                                                                                              #
+#             parms_src_tgt="$parms_src $parms_tgt"             # {"Source/Target" VMAX parms}                                                                                                     #
+#                                                                                                                                                                                                  #
+#             parms_mig="scenario=$scenario pairs=$pairs $parms_src_tgt dir=$migr_dir"     # {"suf=<migr_stg>": code seperately since it changes based on migration stage}                         #
+#                                                                                                                                                                                                  #
+#        The Easy Way:                                                                                                                                                                             #
+#                                                                                                                                                                                                  #
+#             ./metlist -<any_option(s)> $parms_mig suf=<migr_stg>                                                                                                                                 #
+#                       :::::::::::::::: :::::::::: ::::::::::::::                                                                                                                                 #
+#                       :::::::::::::::: :::::::::: ::::::::::::::---("<migr_stg>": "pre", "r1_actb", "scanfc", "post")                                                                            #
+#                       :::::::::::::::: ::::::::::                                                                                                                                                #
+#                       :::::::::::::::: ::::::::::------------------("$parms_mig": predefining SRDF_Metro variables as shown above makes using "metlist" utility much easier.)                    #
+#                       ::::::::::::::::                                                                                                                                                           #
+#                       ::::::::::::::::---(Info: "The Easy Way" satifies all "Option CoReq Dependencies" described below for any combination of CLI option(s).)                                   #
+#                       ::::::::::::::::---(Info: "The Easy Way" may require CLI "parm=" Import files if migr_hosts do not have EMC Solution Enabler installed.)                                   #
+#                       ::::::::::::::::                                                                                                                                                           #
+#                       ::::::::::::::::---(Warning: "-r" is migr_stage dependent, DO NOT use "-r" after Target VMAX migr_LUNs have been discovered,  "-r" ignores "sn_tgt=$sn_tgt" parm.)         #
+#                       ::::::::::::::::---(Warning: if "-r" used after Target VMAX migr_LUNs "masked/scanned", Target SCSI <sd>s are incl. in "-r" "sd_[off|rmv]_src" syntax ("not good").)       #
+#                                                                                                                                                                                                  #
+#        Option Coreq Dependencies:                                                                                                                                                                #
+#                                                                                                                                                                                                  #
+#             ./metlist -e[rt]  pairs=$pairs   $parms_src[_tgt]    [dir=$migr_dir suf=<migr_suf>]     # {"-e" ("enchilada"): "-adlmnps", "-ert" ("whole enchilada"): "-adlmnprst"}                 #
+#                        :::::                                                                                                                                                                     #
+#                        :::::---("-e" ("enchilada")/"-ert" ("whole enchilada"): comprehensive option combinations described below.)                                                               #
+#                        :::::---(!!! CAUTION !!!: never use "-r" (remove) option using "multipath -ll" file created after SRDF_Metro [PV]MAX_tgt has been "masked/scanned" to migr_host.)         #
+#                                                                                                                                                                                                  #
+#             ./metlist -a     [pairs=$pairs]  $parms[_src][_tgt]  [dir=$migr_dir suf=<migr_suf>]     # {"$parms[_src][_tgt]": requires SYMCLI host & Source and/or Target VMAX SN(s)}             #
+#             ./metlist -d     [pairs=$pairs] [$parms[_src][_tgt]] [dir=$migr_dir suf=<migr_suf>]     # {"$parms[_src][_tgt]": requires SYMCLI host & Source and/or Target VMAX SN(s)}             #
+#             ./metlist -l     [pairs=$pairs]  $parms[_src][_tgt]  [dir=$migr_dir suf=<migr_suf>]     # {"$parms[_src][_tgt]": requires SYMCLI host & Source and/or Target VMAX SN(s)}             #
+#             ./metlist -m     [pairs=$pairs] [$parms[_src][_tgt]] [dir=$migr_dir suf=<migr_suf>]     # {Requires RHEL native multipath host, captures raw "multipath -ll" data}                   #
+#             ./metlist -nl     pairs=$pairs   $parms_src[_tgt]    [dir=$migr_dir suf=<migr_suf>]     # {Alt. Import file CoReq(s): "-l": "lun_tbl_src="}                                          #
+#             ./metlist -plmn   pairs=$pairs   $parms_src[_tgt]    [dir=$migr_dir suf=<migr_suf>]     # {Alt. Import file CoReq(s): "-l": "lun_tbl_src=", "-m": "multi="} "-n": "naa_ext_src="}    #
+#             ./metlist -rlmn   pairs=$pairs   $parms_src[_tgt]    [dir=$migr_dir suf=<migr_suf>]     # {Alt. Import file CoReq(s): "-l": "lun_tbl_src=", "-m": "multi=", "-n": "naa_ext_src="}    #
+#             ./metlist -s:::  [pairs=$pairs] [$parms[_src][_tgt]] [dir=$migr_dir suf=<migr_suf>]     # {Requires RHEL native multipath host, captures host multipath scan syntax}                 #
+#                        |:::                                                                                                                                                                      #
+#                        |:::------------(":::": CoReq Dependency Option(s) or related Import file(s) may be used to generate Desired Option output file(s).)                                      #
+#                        |---------------( "|" : Desired Option)                                                                                                                                   #
+#                                                                                                                                                                                                  #
+#             *Notes:                                                                                                                                                                              #
+#                                                                                                                                                                                                  #
+#                   METLIST requires at least one of CLI "-adlmnprs" options (or "-e") to run.  If none of these options are specified, utility returns error msg and exits.                       #
+#                   "-e" ("enchilada": "-) must run on SYMCLI host since it includes SYMCLI "-adl" options.  If "-e" run on non-SYMLCI host, utility returns error msg & exits.                    #
+#                   "-e" does not include "-r" ("remove") since "-r" should only ever be run against a raw <multipath -ll> file captured before "mask/scan" of Target VMAX migr_LUNs.              #
+#                   CLI options may be specified in any order either as a group or individually (ex: "-adl", "-dal", "-d -al", "-d -a -l", ...).                                                   #
+#                   "scenario=" parm is an optional that may be added to any of the Option CoReq dependency combinations described above.                                                          #
+#                                                                                                                                                                                                  #
+#                   METLIST CLI option processing order: "-dalmnprst".  Any related CLI "create" CLI option ("-lmnpr") that precedes another in the same list may be used to create                #
+#                   "CoReq" Import files in the same run in place of pre staging a previously created Import file (ex: "./metlist -pm..." vs "./metlist -p... multi=$multi ...").                  #
+#                                                                                                                                                                                                  #
+#                   Only use "-e[rt]" ([Whole] Enchilada) for "suf=[pre|r1actb]" migr_phases before Target VMAX "mask/scan", insures "sd_[off|del]" syntax only has Source SCSI <sd>s.             #
+#                                                                                                                                                                                                  #
+#                   Syntax may need to be adjusted for migration hosts that do not have EMC Solutions Enabler installed.  Sample "Whole Enchilada" METLIST History file shown below.               #
+#                   If SYMCLI not on migration host(s), METLIST Import file feature may be used to generate desired "environment/syntax" files related to the SRDF Metro migration.                #
+#                                                                                                                                                                                                  #
+#        Function Calls:                                                                                                                                                                           #
+#                                                                                                                                                                                                  #
+#             adt_msk "$sn_[src|tgt]" "aclx_bkup"                                                     # {"-a" (aclx_bkup): create ACLX masking DB backup for Source/Target VMAX}                   #
+#                                                                                                                                                                                                  #
+#             adt_lid "$lun_raw_[src|tgt]_lcl" "$lun_tbl_[src|tgt]" "vmax_int_ext_lunid_tbl"          # {"-l" (lun_tbl): create "internal/external" LUNID table for Source/Target VMAX}            #
+#                                                                                                                                                                                                  #
+#             adt_pth "$multi" "$paths_rpt" "$tmp" "$naa_ext_src_vld" "$naa_ext_src"                  # {"-p" (paths): create "migr_specific/host_overall" "summary/details" path report}          #
+#                                                                                                                                                                                                  #
+#             adt_rmv "$multi" "$naa_ext_src" "sd_remove"                                             # {"-r" (remove): create "sd_[off|del]" SCSI <sd> Source VMAX cleanup syntax}                #
+#                                                                                                                                                                                                  #
+#            *Note: Options "-d" (discover), "-m" (multipath"), "-n" (naa_ext), "-s" (scan) are processed by "adt_cmn" (common) routine with no external function calls required.                  #
+#                                                                                                                                                                                                  #
+#        Actions:                                                                                                                                                                                  #
+#                                                                                                                                                                                                  #
+#             "-d" ($opt_d: 1):  VMAX SYMCLI "symcfg discover" command run on $(hostname).                                                                                                         #
+#                                                                                                                                                                                                  #
+#        Imports:                                                                                                                                                                                  #
+#                                                                                                                                                                                                  #
+#             pairs:                  [<dir=...>|/tmp]/[<pairs=...>]                                                   {SRDF Metro "Source/Target" Symdev migration pairs file}                    #
+#                                                                                                                                                                                                  #
+#             lun_tbl_src (no "-l"):  [<dir=...>|/tmp]/[<lun_tbl_src=...>|lunid_tbl_src_<sr_src=000...>]               {Source VMAX "internal/external" LUNID Relationships Table file}            #
+#             lun_tbl_tgt (no "-l"):  [<dir=...>|/tmp]/[<lun_tbl_tgt=...>|lunid_tbl_tgt_<sr_tgt=000...>]               {Target VMAX "internal/external" LUNID Relationships Table file}            #
+#                                                                                                                                                                                                  #
+#             multi       (no "-m"):  [${dir}|/tmp]/[<multi=...>|multi_$(hostname)][_<suf=...>]                        {RHEL native "multipath -ll" raw data file created on $(hostname)}          #
+#                                                                                                                                                                                                  #
+#             naa_ext_src (no "-n"):  [<dir=...>|/tmp]/[<naa_ext_src=...>]                                             {Source VMAX pre migration "external" LUNID list}                           #
+#                                                                                                                                                                                                  #
+#        Outputs:                                                                                                                                                                                  #
+#                                                                                                                                                                                                  #
+#             "-a" ($opt_a: 1):  /var/symcli/backups/aclxdb_<sn_src=000...>_<timestamp>[_<suf=...>]                    {Source VMAX ACLX masking DB backup file}                                   #
+#             "-a" ($opt_a: 1):  /var/symcli/backups/aclxdb_<sn_tgt=000...>_<timestamp>[_<suf=...>]                    {Target VMAX ACLX masking DB backup file}                                   #
+#                                                                                                                                                                                                  #
+#             "-l" ($opt_l: 1):  [<dir=...>|/tmp]/[<lun_tbl_src[=...]>|lunid_tbl_src_<sr_src=000...>][_<suf=...>]        {Source VMAX "internal/external" LUNID Relationships Table file}          #
+#             "-l" ($opt_l: 1):  [<dir=...>|/tmp]/[<lun_tbl_tgt[=...]>|lunid_tbl_tgt_<sr_tgt=000...>][_<suf=...>]        {Target VMAX "internal/external" LUNID Relationships Table file}          #
+#                                                                                                                                                                                                  #
+#             "-m" ($opt_m: 1):  [<dir=...>|/tmp]/[<multi=...>|multi_$(hostname)][_<suf=...>]                          {RHEL native "multipath -ll" raw data file}                                 #
+#                                                                                                                                                                                                  #
+#             "-n" ($opt_n: 1):  [<dir=...>|/tmp]/[<naa_ext_src=...>|naa_ext_src_<sr_src=000...>][_<suf=...>]          {Source VMAX pre migration "external" LUNID list}                           #
+#                                                                                                                                                                                                  #
+#             "-p" ($opt_p: 1):  [<dir=...>|/tmp]/paths_report_$(hostname)[_<suf=...>]                                 {Host "LUN/path" "summary/details" report (overall & migr specific)}        #
+#                                                                                                                                                                                                  #
+#             "-r" ($opt_r: 1):  [<dir=...>|/tmp]/run_1st_sd_off_src[_<suf=...>]                                       {Source VMAX SCSI <sd> "offline" syntax file, !!! must run as root !!!}     #
+#             "-r" ($opt_r: 1):  [<dir=...>|/tmp]/run_2nd_sd_del_src[_<suf=...>]                                       {Source VMAX SCSI <sd> "delete"  syntax file, !!! must run as root !!!}     #
+#                                                                                                                                                                                                  #
+#             "-s" ($opt_s: 1):  [<dir=...>|/tmp]/scan_host_fc_$(hostname)                                             {RHEL host native multipath [v]HBA scan syntax file}                        #
+#                                                                                                                                                                                                  #
+#        History:                                                                                                                                                                                  #
+#                                                                                                                                                                                                  #
+#             Format:                                                                                                                                                                              #
+#                                                                                                                                                                                                  #
+#                  /tmp/metlist_log_$(hostname)     {METLIST History file:  timestamps, data source, commands, RCs, STD_ERR msgs}                                                                  #
+#                                                                                                                                                                                                  #
+#             "Whole Enchilada" ("-ert"):           {Sample METLIST History file during SRDF Metro "r1actb" (R1 Active Bias) phase prior to scanning Target VMAX}                                  #
+#                                                                                                                                                                                                  #
+#                  scarecrow-23:/users/bnunn/srdf_metro/cfndare $ cat /tmp/metlist_log_scarecrow-23                                                                                                #
+#                                                                                                                                                                                                  #
+#                  METLIST History file: /tmp/metlist_log_scarecrow-23                                                                                                                             #
+#                                                                                                                                                                                                  #
+#                  Begin Timestamp: 2018-10-02_19.03.21_GMT                                                                                                                                        #
+#                                                                                                                                                                                                  #
+#                  Command Line: ./metlist -ert scenario=$scenario pairs=$pairs sn_src=$sn_src sn_tgt=$sn_tgt rdfg_src=$rdfg_src rdfg_tgt=$rdfg_tgt dir=$migr_dir suf=r1actb                       #
+#                                                                                                                                                                                                  #
+#                  Data_Source: scarecrow-23     {User_ID: root, OS_rel: RHEL_7.4, SYMCLI: V8.4.0.7}                                                                                               #
+#                                                                                                                                                                                                  #
+#                  Migr_Scenario:  CFNDARE_migration                                                                                                                                               #
+#                                                                                                                                                                                                  #
+#                  Migr_Topology:  VMAX100K_000196801755 >===(70--RDFG--70)===> VMAX100K_000196801695                                                                                              #
+#                                                                                                                                                                                                  #
+#                  Actions:                                                                                                                                                                        #
+#                                                                                                                                                                                                  #
+#                       "-d" ("discover"):  VMAX "symcfg discover" was run on host scarecrow-23.                                                                                                   #
+#                                                                                                                                                                                                  #
+#                  Imports:                                                                                                                                                                        #
+#                                                                                                                                                                                                  #
+#                       import ("pairs"): SRDF Metro migration "Source/Target" Symdev pairs file staged in /users/bnunn/srdf_metro/cfndare/srdf_metro_01755_01695_cfndare_pairs                    #
+#                                                                                                                                                                                                  #
+#                  Outputs:                                                                                                                                                                        #
+#                                                                                                                                                                                                  #
+#                       "-a" ("aclx_bkup"): Source VMAX ACLX masking DB backed up to /var/symcli/backups/aclxdb_000196801755_2018-10-02_19.03.21_GMT_r1actb on scarecrow-23                        #
+#                                           (if migr_host copy to SAN_mgmt_host).                                                                                                                  #
+#                                                                                                                                                                                                  #
+#                       "-a" ("aclx_bkup"): Target VMAX ACLX masking DB backed up to /var/symcli/backups/aclxdb_000196801695_2018-10-02_19.03.21_GMT_r1actb on scarecrow-23                        #
+#                                           (if migr_host copy to SAN_mgmt_host).                                                                                                                  #
+#                                                                                                                                                                                                  #
+#                       "-l" ("lun_tbl"): Source VMAX "internal/external" LUNID relationships table created in /users/bnunn/srdf_metro/cfndare/lun_tbl_src_000196801755_r1actb                     #
+#                                                                                                                                                                                                  #
+#                       "-l" ("lun_tbl"): Target VMAX "internal/external" LUNID relationships table created in /users/bnunn/srdf_metro/cfndare/lun_tbl_tgt_000196801695_r1actb                     #
+#                                                                                                                                                                                                  #
+#                       "-m" ("multipath"): RHEL native "multipath -ll" raw data file for host scarecrow-23 created in /users/bnunn/srdf_metro/cfndare/multipath_scarecrow-23_r1actb               #
+#                                                                                                                                                                                                  #
+#                       "-n" ("naa_ext"): Source VMAX NAA "external" LUNID migration list created in /users/bnunn/srdf_metro/cfndare/naa_ext_src_000196801755_r1actb                               #
+#                                                                                                                                                                                                  #
+#                       "-p" ("paths"): RHEL native "multipath -ll" "LUN/path" report for host scarecrow-23 created in /users/bnunn/srdf_metro/cfndare/paths_report_scarecrow-23_r1actb            #
+#                                                                                                                                                                                                  #
+#                       "-r" ("remove"): Migration Source VMAX <sd> SCSI device "offline" syntax captured in /users/bnunn/srdf_metro/cfndare/run_1st_sd_off_src_000196801755_r1actb                #
+#                                                                                                                                                                                                  #
+#                       "-r" ("remove"): Migration Source VMAX <sd> SCSI device "delete"  syntax captured in /users/bnunn/srdf_metro/cfndare/run_2nd_sd_del_src_000196801755_r1actb                #
+#                                                                                                                                                                                                  #
+#                       "-s" ("scan"): Host scarecrow-23 FC [v]HBA scan syntax created in /users/bnunn/srdf_metro/cfndare/scan_host_fc_scarecrow-23_r1actb                                         #
+#                                                                                                                                                                                                  #
+#                  Commands:                                                                                                                                                                       #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: symcfg discover                                                                                                                                               #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: symaccess -sid 000196801755 backup -file /var/symcli/backups/aclxdb_000196801755_2018-10-02_19.03.21_GMT_r1actb -noprompt                                     #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: symaccess -sid 000196801695 backup -file /var/symcli/backups/aclxdb_000196801695_2018-10-02_19.03.21_GMT_r1actb -noprompt                                     #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: symdev -sid 000196801755 list -v                                                                                                                              #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: symdev -sid 000196801695 list -v                                                                                                                              #
+#                                                                                                                                                                                                  #
+#                       RC: 0   Cmd: multipath -ll                                                                                                                                                 #
+#                                                                                                                                                                                                  #
+#                  METLIST audit complete (2018-10-02_19.03.30_GMT).  Details in History file /tmp/metlist_log_scarecrow-23                                                                        #
+#                                                                                                                                                                                                  #
+#        Outputs:               {Sample METLIST Output files}                                                                                                                                      #
+#                                                                                                                                                                                                  #
+#             "-a" (<aclx_bkup>):  "Source/Target" VMAX ACLX masking DB backups                                                                                                                    #
+#                                                                                                                                                                                                  #
+#                  scarecrow-23:/var/symcli/backups $ ls -l                                                                                                                                        #
+#                  total 304                                                                                                                                                                       #
+#                  -rw-r--r--. 1 root root 111152 Oct  2 19:03 aclxdb_000196801695_2018-10-02_19.03.21_GMT_r1actb     <= {Target: SN_000196801695}                                                 #
+#                  -rw-r--r--. 1 root root 203568 Oct  2 19:03 aclxdb_000196801755_2018-10-02_19.03.21_GMT_r1actb     <= {Source: SN_000196801755}                                                 #
+#                                                                                                                                                                                                  #
+#             "-l" (<lun_tbl_src>):  Source VMAX "internal/external" LUNID relationships table created in /users/bnunn/srdf_metro/cfndare/lun_tbl_src_000196801755_r1actb                          #
+#                                                                                                                                                                                                  #
+#                  N_int        Dev_int  LUNID_int                         LUNID_ext                         SN_ext        Dev_ext  Type       Sts  Cyl      MB                                    #
+#                  000196801755  00013    60000970000196801755533030303133  60000970000196801755533030303133  000196801755  00013    RDF1+TDEV  RW   143087   268288                               #
+#                  000196801755  00014    60000970000196801755533030303134  60000970000196801755533030303134  000196801755  00014    RDF1+TDEV  RW   143087   268288                               #
+#                  000196801755  00015    60000970000196801755533030303135  60000970000196801755533030303135  000196801755  00015    RDF1+TDEV  RW   143087   268288                               #
+#                  000196801755  00016    60000970000196801755533030303136  60000970000196801755533030303136  000196801755  00016    RDF1+TDEV  RW   143087   268288                               #
+#                  <...>                                                                                                                                                                           #
+#                  000196801755  00594    60000970000196801755533030353934  60000970000196801755533030353934  000196801755  00594    TDEV       RW   297097   557057                               #
+#                  000196801755  00595    60000970000196801755533030353935  60000970000196801755533030353935  000196801755  00595    TDEV       RW   297097   557057                               #
+#                  000196801755  00596    60000970000196801755533030353936  60000970000196801755533030353936  000196801755  00596    TDEV       RW   297097   557057                               #
+#                  000196801755  00597    60000970000196801755533030353937  60000970000196801755533030353937  000196801755  00597    TDEV       RW   148720   278850                               #
+#                                                                                                                                                                                                  #
+#             "-l" (<lun_tbl_tgt>):  Target VMAX "internal/external" LUNID relationships table created in /users/bnunn/srdf_metro/cfndare/lun_tbl_tgt_000196801695_r1actb                          #
+#                                                                                                                                                                                                  #
+#                  N_int        Dev_int  LUNID_int                         LUNID_ext                         SN_ext        Dev_ext  Type       Sts  Cyl      MB                                    #
+#                  000196801695  00013    60000970000196801695533030303133  60000970000196801695533030303133  000196801695  00013    TDEV       RW   3        6                                    #
+#                  000196801695  00014    60000970000196801695533030303134  60000970000196801695533030303134  000196801695  00014    TDEV       RW   3        6                                    #
+#                  000196801695  00015    60000970000196801695533030303135  60000970000196801695533030303135  000196801695  00015    TDEV       RW   3        6                                    #
+#                  000196801695  00016    60000970000196801695533030303136  60000970000196801695533030303136  000196801695  00016    TDEV       RW   3        6                                    #
+#                  <...>                                                                                                                                                                           #
+#                  000196801695  0017C    60000970000196801695533030313743  60000970000196801695533030313743  000196801695  0017C    TDEV       RW   297097   557057                               #
+#                  000196801695  0017D    60000970000196801695533030313744  60000970000196801695533030313744  000196801695  0017D    TDEV       RW   297097   557057                               #
+#                  000196801695  0017E    60000970000196801695533030313745  60000970000196801695533030313745  000196801695  0017E    TDEV       RW   297097   557057                               #
+#                  000196801695  0017F    60000970000196801695533030313746  60000970000196801695533030313746  000196801695  0017F    TDEV       RW   297097   557057                               #
+#                  <...>                                                                                                                                                                           #
+#                                                                                                                                                                                                  #
+#             "-m" (<multipath>):  RHEL native "multipath -ll" raw data file for host scarecrow-23 created in /users/bnunn/srdf_metro/cfndare/multipath_scarecrow-23_r1actb                        #
+#                                                                                                                                                                                                  #
+#                  mpathbp (360000970000196801755533030314643) dm-339 EMC     ,SYMMETRIX                                                                                                           #
+#                  size=545G features='1 queue_if_no_path' hwhandler='0' wp=rw                                                                                                                     #
+#                  `-+- policy='round-robin 0' prio=1 status=active                                                                                                                                #
+#                    |- 0:0:2:63  sdahv             128:912  active ready running                                                                                                                  #
+#                    |- 2:0:3:63  sdams             8:1152   active ready running                                                                                                                  #
+#                    |- 1:0:1:63  sdakb             132:816  active ready running                                                                                                                  #
+#                    `- 3:0:4:63  sdapn             69:1040  active ready running                                                                                                                  #
+#                  <...>                                                                                                                                                                           #
+#                  mpathax (360000970000196801755533030314541) dm-305 EMC     ,SYMMETRIX                                                                                                           #
+#                  size=272G features='1 queue_if_no_path' hwhandler='0' wp=rw                                                                                                                     #
+#                  `-+- policy='round-robin 0' prio=1 status=active                                                                                                                                #
+#                    |- 0:0:2:48  sdvu              69:512   active ready running                                                                                                                  #
+#                    |- 2:0:3:48  sdalk             134:864  active ready running                                                                                                                  #
+#                    |- 1:0:1:48  sdaaw             133:576  active ready running                                                                                                                  #
+#                    `- 3:0:4:48  sdabn             134:592  active ready running                                                                                                                  #
+#                                                                                                                                                                                                  #
+#             "-n" (<naa_ext_src>):  Source VMAX NAA "external" LUNID migration list created in /users/bnunn/srdf_metro/cfndare/naa_ext_src_000196801755_r1actb                                    #
+#                                                                                                                                                                                                  #
+#                  60000970000196801755533030323133                                                                                                                                                #
+#                  60000970000196801755533030323236                                                                                                                                                #
+#                  60000970000196801755533030323034                                                                                                                                                #
+#                  60000970000196801755533030323232                                                                                                                                                #
+#                  <...>                                                                                                                                                                           #
+#                  60000970000196801755533030314334                                                                                                                                                #
+#                  60000970000196801755533030314331                                                                                                                                                #
+#                  60000970000196801755533030314246                                                                                                                                                #
+#                  60000970000196801755533030314330                                                                                                                                                #
+#                                                                                                                                                                                                  #
+#             "-p" (<paths_report>):  RHEL native "multipath -ll" "LUN/path" report for host scarecrow-23 created in /users/bnunn/srdf_metro/cfndare/paths_report_scarecrow-23_r1actb              #
+#                                                                                                                                                                                                  #
+#                  Metro LUN Summary:     {SRDF Metro LUNs only}                                                                                                                                   #
+#                                                                                                                                                                                                  #
+#                  Date        Hostname      #_LUNs  Platform       Size   Pathset  #_Paths  Status                Role                                                                            #
+#                  2018_10-02  scarecrow-23       6  EMC,SYMMETRIX  1024M  0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      16  EMC,SYMMETRIX  16G    0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      28  EMC,SYMMETRIX  545G   0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                                                                                                                                                                                                  #
+#                  Host LUN Summary:      {All Host LUNs}                                                                                                                                          #
+#                                                                                                                                                                                                  #
+#                  Date        Hostname      #_LUNs  Platform       Size   Pathset  #_Paths  Status                Role                                                                            #
+#                  2018_10-02  scarecrow-23       8  EMC,SYMMETRIX  10.0G  0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      12  EMC,SYMMETRIX  1024M  0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23       1  EMC,SYMMETRIX  1.0T   0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      32  EMC,SYMMETRIX  16G    0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      32  EMC,SYMMETRIX  272G   0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23     124  EMC,SYMMETRIX  545G   0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      12  EMC,SYMMETRIX  5.6M   0,1,2,3     4     active_ready_running  GK                                                                              #
+#                  2018_10-02  scarecrow-23       1  EMC,SYMMETRIX  5.6M   0           1     active_ready_running  GK                                                                              #
+#                  2018_10-02  scarecrow-23       5  EMC,SYMMETRIX  68G    0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                  2018_10-02  scarecrow-23      16  EMC,SYMMETRIX  8.0G   0,1,2,3     4     active_ready_running  SAN                                                                             #
+#                                                                                                                                                                                                  #
+#                  Metro LUN Details:     {SRDF Metro LUNs only}                                                                                                                                   #
+#                                                                                                                                                                                                  #
+#                  Date        Hostname      LUN_ID                            Platform       Size   Pathset  #_Paths  Status                Type                                                  #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030314246  EMC,SYMMETRIX  1024M  0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030314330  EMC,SYMMETRIX  1024M  0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030314331  EMC,SYMMETRIX  1024M  0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030314332  EMC,SYMMETRIX  1024M  0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  <...>                                                                                                                                                                           #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030323236  EMC,SYMMETRIX  545G   0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030323239  EMC,SYMMETRIX  545G   0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030323245  EMC,SYMMETRIX  545G   0,1,2,3  4        active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030323246  EMC,SYMMETRIX  545G   0,1,2,3  4        active_ready_running  SAN                                                   #
+#                                                                                                                                                                                                  #
+#                  Host LUN Details:      {All Host LUNs}                                                                                                                                          #
+#                                                                                                                                                                                                  #
+#                  Date        Hostname      LUN_ID                            Platform       Size   Pathset  #_Paths  Status                Type                                                  #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030324645  EMC,SYMMETRIX  10.0G  0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030324646  EMC,SYMMETRIX  10.0G  0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030333030  EMC,SYMMETRIX  10.0G  0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000196801755533030333031  EMC,SYMMETRIX  10.0G  0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  <...>                                                                                                                                                                           #
+#                  2018_10-02  scarecrow-23  60000970000197802076533030303936  EMC,SYMMETRIX  8.0G   0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000197802076533030303937  EMC,SYMMETRIX  8.0G   0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000197802076533030303938  EMC,SYMMETRIX  8.0G   0,1,2,3     4     active_ready_running  SAN                                                   #
+#                  2018_10-02  scarecrow-23  60000970000197802076533030303939  EMC,SYMMETRIX  8.0G   0,1,2,3     4     active_ready_running  SAN                                                   #
+#                                                                                                                                                                                                  #
+#             "-r" (<sd_off_src>):  Migration Source VMAX <sd> SCSI device "offline" syntax captured in /users/bnunn/srdf_metro/cfndare/run_1st_sd_off_src_000196801755_r1actb                     #
+#                                                                                                                                                                                                  #
+#                  echo  "offline  sdahv";  echo  offline  >  /sys/block/sdahv/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdams";  echo  offline  >  /sys/block/sdams/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdakb";  echo  offline  >  /sys/block/sdakb/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdapn";  echo  offline  >  /sys/block/sdapn/device/state;  sleep  1                                                                                             #
+#                  <...>                                                                                                                                                                           #
+#                  echo  "offline  sdahx";  echo  offline  >  /sys/block/sdahx/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdamu";  echo  offline  >  /sys/block/sdamu/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdakd";  echo  offline  >  /sys/block/sdakd/device/state;  sleep  1                                                                                             #
+#                  echo  "offline  sdapp";  echo  offline  >  /sys/block/sdapp/device/state;  sleep  1                                                                                             #
+#                                                                                                                                                                                                  #
+#             "-r" (<sd_del_src>):  Migration Source VMAX <sd> SCSI device "delete"  syntax captured in /users/bnunn/srdf_metro/cfndare/run_2nd_sd_del_src_000196801755_r1actb                     #
+#                                                                                                                                                                                                  #
+#                  echo  "delete  sdahv";  echo  1  >  /sys/block/sdahv/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdams";  echo  1  >  /sys/block/sdams/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdakb";  echo  1  >  /sys/block/sdakb/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdapn";  echo  1  >  /sys/block/sdapn/device/delete;  sleep  1                                                                                                   #
+#                  <...>                                                                                                                                                                           #
+#                  echo  "delete  sdahx";  echo  1  >  /sys/block/sdahx/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdamu";  echo  1  >  /sys/block/sdamu/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdakd";  echo  1  >  /sys/block/sdakd/device/delete;  sleep  1                                                                                                   #
+#                  echo  "delete  sdapp";  echo  1  >  /sys/block/sdapp/device/delete;  sleep  1                                                                                                   #
+#                                                                                                                                                                                                  #
+#             "-s" (<scan_host_fc>):  Host scarecrow-23 FC [v]HBA scan syntax created in /users/bnunn/srdf_metro/cfndare/scan_host_fc_scarecrow-23_r1actb                                          #
+#                                                                                                                                                                                                  #
+#                  for hba in host0 host1 host2 host3;do echo "- - -" > /sys/class/scsi_host/${hba}/scan;sleep 3;done                                                                              #
+#                                                                                                                                                                                                  #
+####################################################################################################################################################################################################
+
+dup_nul () {
+
+# Syntax: dup_nul <src1> [<src2> ... <src#>] <tgt>     # {optionally enclose each parm in double quotes (ex: "src" "tgt")}
+
+# Description: Function deletes hidden control chars & strips out consecutive "zero field" records (ex: null lines) from
+#              one or more source text input files (ex: src1 src2 tgt).  Output is appended to "<tgt>" text output file.
+#              If "<tgt>" is an empty file, it will contain no consecutive "zero field" records when dup_nul is finished.
+#              There is no practical limit to number of source files that dup_nul may process.  dup_nul requires at least
+#              two text files to function (ex: src tgt).  If zero or only one text file is defined, function does nothing.
+#              After execution, global variables "$fcn_num" & "$fcn_str" may be used to query arguments passed to dup_nul. 
+
+# Code:
+
+     fcn_num=$#          # {"$fcn_num": # of arguments  passed to function (ex: 3)}
+
+     fcn_str=$*          # {"$fcn_str": argument string passed to function (ex: src1 src2 tgt)}
+
+     if [[ $fcn_num -ge 2 ]];then
+
+          if [[ $tmp = /tmp/[a-z]*tmp ]];then dup_nul_stg=${tmp}_dup_nul_stg;else dup_nul_stg=/tmp/dup_nul_stg;fi
+
+          rm -rf $dup_nul_stg
+
+          touch $dup_nul_stg 2>/dev/null
+
+          num_src=$(($fcn_num-1))
+
+          pos_tgt=$fcn_num
+
+          src_str=$(echo $fcn_str | awk '{for (s=1;s<=num_src;s++) {src_str=src_str" "$s}};END {print src_str}' num_src=$num_src)
+
+          tgt=$(echo $fcn_str | awk '{print $pos_tgt}' pos_tgt=$pos_tgt)
+
+          for src in $src_str;do cat $src;done > $dup_nul_stg
+
+          awk '{gsub(/[[:cntrl:]]+/,"",$0)
+                if (NR==1) {
+                            nf_prev=NF
+                            print $0
+                           }
+                if (NR >1) {
+                            if (!(nf_prev==0 && NF==0)) {print $0}
+                            nf_prev=NF
+                           }
+               }' $dup_nul_stg >> $tgt
+
+          if [[ $opt_t -ne 1 ]];then rm -rf $dup_nul_stg;fi
+
+     fi
+
+}
+
+adt_env () {
+
+# Syntax: adt_env
+
+# Description: "discover/initialize" vmax_audit environment.
+
+# Code:
+
+# Setup environment & capture Local/Remote VMAX SNs visible to host                                            # {Run from storage management host (reqs: Solutions Enabler, recommended >= v8.x)}
+
+     utility=metlist                                                                                           # {Define utility}
+
+     utility_uc=$(echo $utility | awk '{print toupper($1)}')                                                   # {Capture "$utility" in upper case}
+
+     rc=0                                                                                                      # {Set initial utility "$rc" (return code) to "0"}
+
+     if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                                   # {Sun: set "nawk" (new awk), non-Sun (ex: RHEL, HP/UX): set "awk".}
+
+     id=$(id | $awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')                        # {Determine user id ("root" versus "non-root").}
+     if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                                     # {Set $sudo based on $id (root: sudo=""; non-root: sudo="sudo").}
+
+     date="$(date '+%Y_%m-%d')"                                                                                # {Capture date, sample format: 2018_01-05}
+     ts=$(date '+%Y-%m-%d_%H.%M.%S_%Z')                                                                        # {Capture audit beginning timestamp (ex: 2016-09-23_13:43:46_PDT)}
+     host=$(hostname)                                                                                          # {Capture name of storage array management host (ex: "rcdn9|alln01|rtp1"-san-mgr1)}
+
+     history=/tmp/${utility}_log_${host}                                                                       # {Utility History audit file:  timestamps, data source, commands, RCs, STD_ERR msgs}
+     actions=/tmp/${utility}_act_${host}                                                                       # {Utility Actions audit file}
+     imports=/tmp/${utility}_imp_${host}                                                                       # {Utility Imports audit file}
+     outputs=/tmp/${utility}_out_${host}                                                                       # {Utility Outputs audit file}
+     results=/tmp/${utility}_res_${host}                                                                       # {Utility Results audit file}
+
+     tmp=/tmp/mettmp                                                                                           # {$tmp staging directory}
+
+     log=${tmp}_log                                                                                            # {staging area for $history file}
+
+     multi_lcl=multipath_${host}                                                                               # {migr host CLI "-m" local raw "multipath -ll" file}
+
+     paths_rpt=paths_report_${host}                                                                            # {RHEL native "multipath -ll" "LUN/path" ("summary/details") report file}
+
+#    paths_det_all=${tmp}_paths_det_all_lcl                                                                    # {RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (host LUNs: all)}
+#    paths_det_met=${tmp}_paths_det_met_lcl                                                                    # {RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (migr LUNs: only)}
+#    paths_sum_all=${tmp}_paths_sum_all_lcl                                                                    # {RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (host LUNs: all)}
+#    paths_sum_met=${tmp}_paths_met_met_lcl                                                                    # {RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (migr LUNs: only)}
+
+     lun_raw_src_lcl=${tmp}_lun_raw_src_lcl                                                                    # {Source SN CLI "-l" local file (raw): "symdev ,,, -v" "int/ext" LUNIDs}
+     lun_raw_tgt_lcl=${tmp}_lun_raw_tgt_lcl                                                                    # {Target SN CLI "-l" local file (raw): "symdev ,,, -v" "int/ext" LUNIDs}
+
+     sn_dev_src_lcl=${tmp}_sn_dev_src_lcl                                                                      # {Migration Source "<SN> <Symdev>" list, DS: $sn_src & $pairs (col 1)}
+
+     scan_host_fc=scan_host_fc_${host}                                                                         # {Host FC [v]HBA scan syntax}
+
+     pat_dec="[0-9][0-9]*"                                                                                     # {$pat_dec    pattern: >= 1 consecutive  digits (decimal)}
+     pat_hex="[[:xdigit:]][[:xdigit:]]*"                                                                       # {$pat_hex    pattern: >= 1 consecutive xdigits (hex)}
+     pat_hex6="[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]"                       # {$pat_hex6   pattern:   6 consecutive xdigits (hex)}
+     pat_sd="[[:blank:]][0-9]+:[0-9]+:[0-9]+:[0-9]+[[:blank:]]+sd[a-z]+[[:blank:]]"                            # {$pat_sd     pattern: DS: "Smultipath -ll" (use: "awk '$0~pat_sd ..."}
+     pat_sa="[[:alpha:]][[:alpha:]]-"                                                                          # {$pat_sa     partial: VMAX SA (SCSI Adapter) Frontend Director (ex: "FA-" of "FA-1D")}
+     pat_sn="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"                                                 # {$pat_sn     pattern: full 12 digit VMAX serial number (d'000...')}
+     pat_symdev="[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"                                      # {$pat_symdev pattern: VMAX Symdev (5 hex characters, case insensitive)}
+     pat_pairs="^[[:blank:]]*${pat_symdev}[[:blank:]]+${pat_symdev}[[:blank:]]*"                               # {$pat_pairs  pattern:  VMAX SRDF Metro pairs file format: <Symdev_src> <Symdev_tgt>}
+     pat_lunid="6000097[[:xdigit:]]${pat_sn}${pat_hex6}${pat_hex6}"                                            # {$pat_lunid  pattern: VMAX LUNID: "6000097.<12 digit SN><6 hex_bytes>"}
+
+     $sudo rm -rf $history                                                                                     # {Remove prev utility History audit file}
+     $sudo rm -rf $actions                                                                                     # {Remove prev utility Actions audit file}
+     $sudo rm -rf $imports                                                                                     # {Remove prev utility Imports audit file}
+     $sudo rm -rf $outputs                                                                                     # {Remove prev utility Outputs audit file}
+     $sudo rm -rf $results                                                                                     # {Remove prev utility Results audit file}
+
+     $sudo rm -rf ${tmp}_*                                                                                     # {Remove any ${tmp} files from previous audit}
+
+     touch $history                       2>/dev/null                                                          # {Init utility History audit file}
+     touch $actions                       2>/dev/null                                                          # {Init utility Actions audit file}
+     touch $imports                       2>/dev/null                                                          # {Init utility Imports audit file}
+     touch $outputs                       2>/dev/null                                                          # {Init utility Outputs audit file}
+     touch $results                       2>/dev/null                                                          # {Init utility Results audit file}
+
+     touch $log                           2>/dev/null                                                          # {Init VMAX staging area for $history file}
+
+     touch $lun_raw_src_lcl               2>/dev/null                                                          # {Init source SN CLI "-l" local file (raw): "symdev ,,, -v" "int/ext" LUNIDs}
+     touch $lun_raw_tgt_lcl               2>/dev/null                                                          # {Init target SN CLI "-l" local file (raw): "symdev ,,, -v" "int/ext" LUNIDs}
+
+#    touch $paths_det_all                 2>/dev/null                                                          # {Init RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (host LUNs: all)}
+#    touch $paths_det_met                 2>/dev/null                                                          # {Init RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (migr LUNs: only)}
+#    touch $paths_sum_all                 2>/dev/null                                                          # {Init RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (host LUNs: all)}
+#    touch $paths_sum_met                 2>/dev/null                                                          # {Init RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (migr LUNs: only)}
+
+     touch $sn_dev_src_lcl                2>/dev/null                                                          # {Init Migration Source "<SN> <Symdev>" list, DS: $sn_src & $pairs (col 1)}
+
+     touch ${tmp}_fields                  2>/dev/null                                                          # {Init CLI fields    file (store KSH "$*" system variable transposed)}
+     touch ${tmp}_options                 2>/dev/null                                                          # {Init CLI options   file (store "-[a-z]" single letter options transposed)}
+     touch ${tmp}_parms                   2>/dev/null                                                          # {Init CLI parms     file (store "<parm>=<value>") parms transposed}
+
+     touch ${tmp}_sd_srch_flt             2>/dev/null                                                          # {Init <sd> SCSI device search "filter" file, format: <lunid_ext> list (future)}
+
+     touch ${tmp}_dis_cmn                 2>/dev/null                                                          # {Init CLI "-d" ("symcfg discover") tmp file}
+
+     touch ${tmp}_aclx_msk                2>/dev/null                                                          # {Init CLI "-a" ACLX (Access Control LogiX) DB ("symaccess ... backup ...") tmp file}
+
+     print "\nCommands:\n" > $log                                                                              # {Add header to Log (command history) audit file}
+
+     print "\nActions:"  > $actions                                                                            # {Add header to Actions audit file}
+     print "\nImports:"  > $imports                                                                            # {Add header to Imports audit file}
+     print "\nOutputs:"  > $outputs                                                                            # {Add header to Outputs audit file}
+
+     print "\n${utility_uc} History file: $history" >  $history                                                # {Identify utility "history" file location}
+     print "\nBegin Timestamp: $ts"                 >> $history                                                # {Capture begining timestamp into $history file}
+     print "\nCommand Line: $cmd_line"              >> $history                                                # {Capture command line into $history file}
+
+     os_rel="-"                                                                                                # {Capture Host OS release}
+     if [[ -s /etc/redhat-release ]];then
+          os_rel=$($awk '/^Red/{print "RHEL_"$(NF-1)}' /etc/redhat-release)
+     fi
+
+     symcli_fnd=0                                                                                              # Initialize EMC Solutions Enabler (aka SYMCLI) found to "0" (zero)
+     symcli_ver="-"                                                                                            # Initialize EMC Solutions Enabler (aka SYMCLI) version to "-"
+
+     if [[ -d /usr/symcli/bin ]];then                                                                          # If SYMCLI present, export path (/usr/symcli/bin) set found & capture version
+          export PATH=$PATH:/usr/symcli/bin
+          symcli_fnd=1
+          symcli_ver=$(symcli | $awk '$5~/SYMCLI/{version=$7;print version}')
+     fi
+
+     print "\nData_Source: $host     {User_ID: ${id}, OS_rel: ${os_rel}, SYMCLI: ${symcli_ver}}" >> $history      # {Capture Data_Source host info into $history file}
+
+}
+
+adt_cli () {
+
+# Syntax: adt_cli "$fields"                                                                                    # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: "capture/update" command line options & fields (updates: modify "<parm>=<file>" with CLI "dir=", "suf=" if set).
+
+# Code:
+
+     # Capture "${tmp}_fields":
+
+          echo "$fields" | $awk '{for (f=1; f<=NF; f++) {print $f}}' > ${tmp}_fields
+
+     # Capture "${tmp}_options":
+
+          $awk '$1~/^[-]/  {print $1}' ${tmp}_fields | sort -u       > ${tmp}_options
+
+     # Capture "${tmp}_parms":
+
+          $awk '$1!~/^[-]/ {print $1}' ${tmp}_fields                 > ${tmp}_parms
+
+     # Set optional CLI options to false (0):
+
+          opt_a=0                                                                                                  # {set "-a" ("aclx_bkup") to false (0: default)}
+          opt_d=0                                                                                                  # {set "-d" ("discover")  to false (0: default)}
+          opt_e=0                                                                                                  # {set "-d" ("enchilada") to false (0: default)}
+          opt_l=0                                                                                                  # {set "-l" ("lunid_tbl") to false (0: default)}
+          opt_m=0                                                                                                  # {set "-m" ("multipath") to false (0: default)}
+          opt_n=0                                                                                                  # {set "-n" ("naa_ext")   to false (0: default)}
+          opt_p=0                                                                                                  # {set "-p" ("paths")     to false (0: default)}
+          opt_r=0                                                                                                  # {set "-r" ("remove")    to false (0: default)}
+          opt_s=0                                                                                                  # {set "-s" ("scan")      to false (0: default)}
+          opt_t=0                                                                                                  # {set "-t" ("temporary") to false (0: default)}
+
+     # "check/set" optional CLI options to true (1):
+
+          if egrep "a" ${tmp}_options > /dev/null;then opt_a=1;fi                                                  # {set "-a" ("aclx_bkup") to true (1)}
+          if egrep "d" ${tmp}_options > /dev/null;then opt_d=1;fi                                                  # {set "-d" ("discover")  to true (1)}
+          if egrep "e" ${tmp}_options > /dev/null;then opt_e=1;fi                                                  # {set "-e" ("enchilada") to true (1)}
+          if egrep "l" ${tmp}_options > /dev/null;then opt_l=1;fi                                                  # {set "-l" ("lunid_tbl") to true (1)}
+          if egrep "m" ${tmp}_options > /dev/null;then opt_m=1;fi                                                  # {set "-m" ("multipath") to true (1)}
+          if egrep "n" ${tmp}_options > /dev/null;then opt_n=1;fi                                                  # {set "-n" ("naa_ext")   to true (1)}
+          if egrep "p" ${tmp}_options > /dev/null;then opt_p=1;fi                                                  # {set "-p" ("paths")     to true (1)}
+          if egrep "r" ${tmp}_options > /dev/null;then opt_r=1;fi                                                  # {set "-r" ("remove")    to true (1)}
+          if egrep "s" ${tmp}_options > /dev/null;then opt_s=1;fi                                                  # {set "-s" ("scan")      to true (1)}
+          if egrep "t" ${tmp}_options > /dev/null;then opt_t=1;fi                                                  # {set "-t" ("temporary") to true (1)}
+
+     # if "-e" ("enchilada"), set "-adlmnps" options to true (1):
+
+          if [[ $opt_e -eq 1 ]];then
+
+               opt_a=1                                                                                             # {"-e" override: set "-a" ("aclx_bkup") to true (1)}
+               opt_d=1                                                                                             # {"-e" override: set "-d" ("discover")  to true (1)}
+               opt_l=1                                                                                             # {"-e" override: set "-l" ("lunid_tbl") to true (1)}
+               opt_m=1                                                                                             # {"-e" override: set "-m" ("multipath") to true (1)}
+               opt_n=1                                                                                             # {"-e" override: set "-n" ("naa_ext")   to true (1)}
+               opt_p=1                                                                                             # {"-e" override: set "-p" ("paths")     to true (1)}
+               opt_s=1                                                                                             # {"-e" override: set "-s" ("scan")      to true (1)}
+
+          fi
+
+     # Set default CLI parms to "<null>":
+
+             scenario=""
+                multi=""
+                pairs=""
+               sn_src=""
+               sn_tgt=""
+             rdfg_src=""
+             rdfg_tgt=""
+          naa_ext_src=""
+          lun_tbl_src=""
+          lun_tbl_tgt=""
+                  suf=""
+                  dir="/tmp/"                                                                                   # {"/tmp/": default staging dir if CLI "dir=" not set}
+
+     # "check/set" optional CLI parm override values:
+
+          if egrep "^scenario="    ${tmp}_parms > /dev/null;then    scenario="$($awk    '/^scenario=/{print substr($0,index($0,"scenario=")+9)}'     ${tmp}_parms)";fi
+          if egrep "^multi="       ${tmp}_parms > /dev/null;then       multi="$($awk       '/^multi=/{print substr($0,index($0,"multi=")+6)}'        ${tmp}_parms)";fi
+          if egrep "^pairs="       ${tmp}_parms > /dev/null;then       pairs="$($awk       '/^pairs=/{print substr($0,index($0,"pairs=")+6)}'        ${tmp}_parms)";fi
+          if egrep "^sn_src="      ${tmp}_parms > /dev/null;then      sn_src="$($awk      '/^sn_src=/{print substr($0,index($0,"sn_src=")+7)}'       ${tmp}_parms)";fi
+          if egrep "^sn_tgt="      ${tmp}_parms > /dev/null;then      sn_tgt="$($awk      '/^sn_tgt=/{print substr($0,index($0,"sn_tgt=")+7)}'       ${tmp}_parms)";fi
+          if egrep "^rdfg_src="    ${tmp}_parms > /dev/null;then    rdfg_src="$($awk    '/^rdfg_src=/{print substr($0,index($0,"rdfg_src=")+9)}'     ${tmp}_parms)";fi
+          if egrep "^rdfg_tgt="    ${tmp}_parms > /dev/null;then    rdfg_tgt="$($awk    '/^rdfg_tgt=/{print substr($0,index($0,"rdfg_tgt=")+9)}'     ${tmp}_parms)";fi
+          if egrep "^naa_ext_src=" ${tmp}_parms > /dev/null;then naa_ext_src="$($awk '/^naa_ext_src=/{print substr($0,index($0,"naa_ext_src=")+12)}' ${tmp}_parms)";fi
+          if egrep "^lun_tbl_src=" ${tmp}_parms > /dev/null;then lun_tbl_src="$($awk '/^lun_tbl_src=/{print substr($0,index($0,"lun_tbl_src=")+12)}' ${tmp}_parms)";fi
+          if egrep "^lun_tbl_tgt=" ${tmp}_parms > /dev/null;then lun_tbl_tgt="$($awk '/^lun_tbl_tgt=/{print substr($0,index($0,"lun_tbl_tgt=")+12)}' ${tmp}_parms)";fi
+          if egrep "^suf="         ${tmp}_parms > /dev/null;then         suf="$($awk         '/^suf=/{print substr($0,index($0,"suf=")+4)}'          ${tmp}_parms)";fi
+          if egrep "^dir="         ${tmp}_parms > /dev/null;then         dir="$($awk         '/^dir=/{print substr($0,index($0,"dir=")+4)}'          ${tmp}_parms)";fi
+
+}
+
+adt_val () {
+
+# Syntax: adt_val               # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: "validate/update" command line options & fields
+
+# Code:
+
+     # If none of CLI "-adlmnprs" option(s) are set, inform user at least one of these options is required and exit:
+
+          sum_req=$(($opt_a+$opt_d+$opt_e+$opt_l+$opt_m+$opt_n+$opt_p+$opt_r+$opt_s))
+
+          if [[ $sum_req -eq 0 ]];then
+
+               rc=1
+               print "\nRC: $rc, at least one of CLI options \"-adlmnprs\" must be set for $utility to run." >> $history
+               print "\nReview documentation inside $utility and try to rerun utility."                      >> $history
+               print "\nSee History $history file for details.\n"                                            >> $history
+               cat $history
+               exit $rc
+
+          fi
+
+     # "check/prefix" CLI parm files with migration staging directory ("$dir"):
+
+          if [[ -n $dir ]];then dir=$(echo $dir | $awk '{dir=$1;if (dir~/[/]$/) {dir=dir} else {dir=dir"/"};print dir}');fi
+
+          if [[ -n $multi       && $multi       != */* && -n $dir ]];then       multi="${dir}${multi}";fi
+          if [[ -n $pairs       && $pairs       != */* && -n $dir ]];then       pairs="${dir}${pairs}";fi
+          if [[ -n $naa_ext_src && $naa_ext_src != */* && -n $dir ]];then naa_ext_src="${dir}${naa_ext_src}";fi
+          if [[ -n $lun_tbl_src && $lun_tbl_src != */* && -n $dir ]];then lun_tbl_src="${dir}${lun_tbl_src}";fi
+          if [[ -n $lun_tbl_tgt && $lun_tbl_tgt != */* && -n $dir ]];then lun_tbl_tgt="${dir}${lun_tbl_tgt}";fi
+
+     # If CLI "scenario="<desc>" is set, verify it contains only one record (e.g. single line of text):
+
+          scenario_vld=0
+
+          if [[ -n $scenario ]];then
+
+               scenario_vld=$(echo "$scenario" | $awk 'BEGIN {scenario_vld=1};NR>1 {scenario_vld=0};END {print scenario_vld}')
+
+          fi
+
+          if [[ -n $scenario && $scenario_vld -eq 0 ]];then
+
+               rc=1
+               print "\nRC: $rc, CLI \"scenario=${scenario}\" parm contains embedded <white_space> (blanks or tabs) which is invalid." >> $history
+               print "\nTry substituting \"_\" for <white_space> & rerun ${utiliy}."                                                   >> $history
+               print "\nSee History $history file for details.\n"                                                                      >> $history
+               cat $history
+               exit $rc
+
+          fi
+
+          if [[ $scenario_vld -eq 1 ]];then print "\nMigr_Scenario:  ${scenario}" >> $history;fi
+
+     # If CLI "-d" or "-l" are set, verify SYMCLI host:
+
+          sum_a_d_l=$(($opt_a+$opt_d+$opt_l))
+
+          if [[ $sum_a_d_l -gt 0 && $symcli_fnd -eq 0 ]];then
+
+               rc=1
+               print "\nRC: $rc, CLI options \"-a\" (aclx_bkup), \"-d\" (discover) & \"-l\" (lun_tbl), each require SYMCLI which was not found on host ${host}." >> $history
+               print "\nInstall Solutions Enabler on the host or find alternate host to run $utility utility on."                                                >> $history
+               print "\nSee History $history file for details.\n"                                                                                                >> $history
+               cat $history
+               exit $rc
+
+          fi
+
+     # If set, verify CLI "naa_ext_src=<import file>" Source external LUNID list format (single column, 16 bytes):
+
+          naa_ext_src_vld=0
+
+          if [[ -n $naa_ext_src ]];then
+
+               if [[ -s $naa_ext_src && -r $naa_ext_src ]];then
+
+                    naa_ext_src_vld=$($awk 'BEGIN {num_naa_ext_src=0;naa_ext_src_vld=1}
+                                                  {++num_naa_ext_src;if ($0!~pat_lunid) {naa_ext_src_vld=0}}
+                                              END {
+                                                   if (num_naa_ext_src==0) {naa_ext_src_vld=0}
+                                                   print naa_ext_src_vld
+                                                  }' pat_lunid="^${pat_lunid}$" $naa_ext_src)
+
+               fi
+
+          fi
+
+          if [[ $opt_n -eq 0 ]];then
+
+               if [[ -n $naa_ext_src && $naa_ext_src_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI parm \"naa_ext_src=${naa_ext_src}\" (migration Source VMAX list of external LUNIDs being migrated) is missing or invalid." >> $history
+                    print "\n\"naa_ext_src=<file>\" format (1 column, 16 bytes/LUNID).  Data Source: \"./asmlist -d\" @ http://wwwin-people.cisco.com/bnunn/tools"   >> $history
+                    print "\nSee History $history file for details.\n"                                                                                               >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          fi
+
+     # If set & "$opt_l = 0", verify CLI "lun_tbl_[src|tgt]=<import file>" <LUNID> table existence & format (Source & Target):
+
+          # pat_sn="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
+          # pat_symdev="[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"
+          # pat_lunid="6000097[[:xdigit:]]${pat_sn}${pat_hex6}${pat_hex6}"
+
+          # scarecrow-23:/users/bnunn/audit/vmax/srdf_metro/develop $ head -2 $lun_tbl_src
+          # SN_int        Dev_int  LUNID_int                         LUNID_ext                         SN_ext        Dev_ext  Type       Sts  Cyl      MB
+          # 000196801755  00013    60000970000196801755533030303133  60000970000196801755533030303133  000196801755  00013    RDF1+TDEV  RW   143087   268288
+
+          # Verify Source <LUNID> table import file ("$opt_l = 0"):
+
+               lun_tbl_src_vld=0
+
+               if [[ -n $lun_tbl_src ]];then
+
+                    if [[ -s $lun_tbl_src && -r $lun_tbl_src ]];then
+
+                         lun_tbl_src_vld=$($awk  'BEGIN {lun_tbl_src_vld=1;num_pat_lunid=0}
+                                           $3~pat_lunid {
+                                                         ++num_pat_lunid
+                                                         if (NF!=10)                           {lun_tbl_src_vld=0}
+                                                         if ($4!~pat_lunid)                    {lun_tbl_src_vld=0}
+                                                         if ($1!~pat_sn     || $5!~pat_sn)     {lun_tbl_src_vld=0}
+                                                         if ($2!~pat_symdev || $6!~pat_symdev) {lun_tbl_src_vld=0}
+                                                        }
+                                                    END {
+                                                         if (num_pat_lunid==0) {lun_tbl_src_vld=0}
+                                                         print lun_tbl_src_vld
+                                                        }' pat_lunid="$pat_lunid" pat_sn="^${pat_sn}$" pat_symdev="^${pat_symdev}$" $lun_tbl_src)
+
+                    fi
+
+                    if [[ $opt_l -eq 0 && $lun_tbl_src_vld -eq 0 ]];then
+
+                         rc=1
+                         print "\nRC: $rc, CLI \"lun_tbl_src=${lun_tbl_src}\" is invalid or is missing content." >> $history
+                         print "\n\"verify/update\" \"lun_tbl_src=\" parm file & attempt to rerun $utility."     >> $history
+                         print "\nSee History $history file for details.\n"                                      >> $history
+                         cat $history
+                         exit $rc
+
+                    fi
+
+               fi
+
+          # Verify Target <LUNID> table import file ("$opt_l = 0"):
+
+               lun_tbl_tgt_vld=0
+
+               if [[ -n $lun_tbl_tgt ]];then
+
+                    if [[ -s $lun_tbl_tgt && -r $lun_tbl_tgt ]];then
+
+                         lun_tbl_tgt_vld=$($awk  'BEGIN {lun_tbl_tgt_vld=1;num_pat_lunid=0}
+                                           $3~pat_lunid {
+                                                         ++num_pat_lunid
+                                                         if (NF!=10)                           {lun_tbl_tgt_vld=0}
+                                                         if ($4!~pat_lunid)                    {lun_tbl_tgt_vld=0}
+                                                         if ($1!~pat_sn     || $5!~pat_sn)     {lun_tbl_tgt_vld=0}
+                                                         if ($2!~pat_symdev || $6!~pat_symdev) {lun_tbl_tgt_vld=0}
+                                                        }
+                                                    END {
+                                                         if (num_pat_lunid==0) {lun_tbl_tgt_vld=0}
+                                                         print lun_tbl_tgt_vld
+                                                        }' pat_lunid="$pat_lunid" pat_sn="^${pat_sn}$" pat_symdev="^${pat_symdev}$" $lun_tbl_tgt)
+
+
+                    fi
+
+                    if [[ opt_l -eq 0 && $lun_tbl_tgt_vld -eq 0 ]];then
+
+                         rc=1
+                         print "\nRC: $rc, CLI \"lun_tbl_tgt=${lun_tbl_tgt}\" is invalid or is missing content." >> $history
+                         print "\n\"verify/update\" \"lun_tbl_tgt=\" parm file & attempt to rerun $utility."     >> $history
+                         print "\nSee History $history file for details.\n"                                      >> $history
+                         cat $history
+                         exit $rc
+
+                    fi
+
+               fi
+
+     # If set & "$opt_m = 0", verify CLI "multi=<import file>" validity:
+
+          # pat_sd="[[:blank:]][0-9]+:[0-9]+:[0-9]+:[0-9]+[[:blank:]]+sd[a-z]+[[:blank:]]"
+
+          # mpathbp (360000970000196801755533030314643) dm-339 EMC     ,SYMMETRIX
+          # size=545G features='1 queue_if_no_path' hwhandler='0' wp=rw
+          # `-+- policy='round-robin 0' prio=1 status=active
+          #   |- 0:0:1:141 sdaz              67:48    active ready running
+          #   |- 2:0:2:141 sdtd              8:688    active ready running
+          #   |- 1:0:2:141 sdiv              135:240  active ready running
+          #   `- 3:0:3:141 sdwj              69:752   active ready running
+          # mpathak (360000970000196801755533030314441) dm-278 EMC     ,SYMMETRIX
+          # size=16G features='1 queue_if_no_path' hwhandler='0' wp=rw
+          # `-+- policy='round-robin 0' prio=1 status=active
+          #   |- 0:0:1:157 sdcg              69:64    active ready running
+          #   |- 2:0:2:157 sdtz              66:528   active ready running
+          #   |- 1:0:2:157 sdkb              65:496   active ready running
+          #   `- 3:0:3:157 sdxm              71:704   active ready running
+
+          multi_vld=0
+
+          if [[ -n $multi ]];then
+
+               if [[ -s $multi && -r $multi ]];then
+
+                    multi_vld=$($awk       'BEGIN {multi_vld=1;num_dm=0;fnd_dm=1;fnd_size=1;fnd_policy=1;fnd_sd=1}
+                                        $3~/^dm-/ {++num_dm}
+                                      $1~/^size=/ {if ($2!~/^features=/)            {fnd_size=0}}
+                                     $2~/^policy/ {if ($NF!~/^status=/)             {fnd_policy=0}}
+                                         $3~/^sd/ {if  ($0!~pat_sd)                 {fnd_sd=0}}
+                                              END {if (num_dm==0) {fnd_dm=0}
+                                                   fnd_multi=(fnd_dm+fnd_size+fnd_policy+fnd_sd)
+                                                   if (fnd_multi!=4) {multi_vld=0};print multi_vld}' pat_sd="$pat_sd" $multi)
+
+               fi
+
+               if [[ opt_m -eq 0 && $multi_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"multi=${multi}\" is invalid or is missing content"    >> $history
+                    print "\n\"verify/update\" \"multi=\" parm file & attempt to rerun $utility." >> $history
+                    print "\nSee History $history file for details.\n"                            >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          fi
+
+     # If set, verify CLI "pairs=" parm validity:
+
+          # pat_symdev="[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"            # {$pat_symdev pattern: VMAX Symdev (5 hex characters, case insensitive)}
+          # pat_pairs="^[[:blank:]]*${pat_symdev}[[:blank:]]+${pat_symdev}[[:blank:]]*"     # {$pat_pairs  pattern:  VMAX SRDF Metro pairs file format: <Symdev_src> <Symdev_tgt>}
+
+          # scarecrow-23:/users/bnunn/audit/vmax/srdf_metro/develop $ echo "00001 00002" | awk '$0~pat_pairs' pat_pairs="$pat_pairs"
+          # 00001 00002
+
+          # scarecrow-23:/users/bnunn/audit/vmax/srdf_metro/develop $ $awk '$0~pat_pairs' pat_pairs="$pat_pairs" $pairs | wc -l
+          # 50
+
+          pairs_vld=0
+
+          if [[ -s $pairs && -r $pairs ]];then
+
+               num_pairs=$($awk '$0~pat_pairs' pat_pairs="$pat_pairs" $pairs | wc -l)
+
+               num_invalid=$($awk '!($0~pat_pairs && length($1)==5 && length($2)==5)' pat_pairs="$pat_pairs" $pairs | awk '!($0~/^$/ || $0~/^[[:blank:]]*#/)' | wc -l)
+
+               if [[ num_pairs -gt 0 && num_invalid -eq 0 ]];then pairs_vld=1;fi
+
+          fi
+
+          if [[ -n $pairs && $pairs_vld -eq 0 ]];then
+
+               rc=1
+               print "\nRC: $rc, SRDF Metro pairs file should contains \"source/target\" migration Symdev pair (cols 1 & 2, 5 chars/Symdev, ex: \"0030F 0140C\")."        >> $history
+               print "\nComments allowed if first non-blank char in line or after \"source/target\" pair is a \"#\" (ex: \"# <comment>\", \"0030F 0140C # <comment>\")."  >> $history
+               print "\nSee History $history file for details.\n"                                                                                                         >> $history
+               cat $history
+               exit $rc
+
+          fi
+
+     # If set, verify CLI "rdfg_[src|tgt]=" parm validity:          {format: "000...", 12 digits}
+
+          # pat_dec="[0-9][0-9]*"
+
+          # Source RDFG (Remote Data Facility Group):
+
+               rdfg_src_vld=0
+
+               if [[ -n $rdfg_src ]];then
+
+                    rdfg_src_vld=$(echo $rdfg_src | $awk 'BEGIN {rdfg_src_vld=1}
+                                                                {rdfg_src=$1;if (rdfg_src!~pat_dec || NR>1 || NF>1) {rdfg_src_vld=0}}
+                                                            END {print rdfg_src_vld}' pat_dec="^$pat_dec$")
+
+               fi
+
+               if [[ -n $rdfg_src && $rdfg_src_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"rdfg_src=${rdfg_src}\" is invalid.  Parm should be a decimal used by \"symrdf\" for creating SRDF RDFGs (Remote Data Facility Groups)." >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                              >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          # Target RDFG (Remote Data Facility Group):
+
+               rdfg_tgt_vld=0
+
+               if [[ -n $rdfg_tgt ]];then
+
+                    rdfg_tgt_vld=$(echo $rdfg_tgt | $awk 'BEGIN {rdfg_tgt_vld=1}
+                                                                {rdfg_tgt=$1;if (rdfg_tgt!~pat_dec || NR>1 || NF>1) {rdfg_tgt_vld=0}}
+                                                            END {print rdfg_tgt_vld}' pat_dec="^$pat_dec$")
+
+               fi
+
+               if [[ -n $rdfg_tgt && $rdfg_tgt_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"rdfg_tgt=${rdfg_tgt}\" is invalid.  Parm should be a decimal used by \"symrdf\" for creating SRDF RDFGs (Remote Data Facility Groups)." >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                              >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+     # If set, verify CLI "sn_[src|tgt]=" parm validity:          {format: "000...", 12 digits}
+
+          # pat_sn="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"
+
+          # Source SN:
+
+               sn_src_vld=0
+
+               if [[ -n $sn_src ]];then
+
+                    sn_src_vld=$(echo $sn_src | $awk 'BEGIN {sn_src_vld=1};{sn_src=$0;if (sn_src!~pat_sn || NF>1) {sn_src_vld=0}};END {print sn_src_vld}' pat_sn="^$pat_sn$")
+
+               fi
+
+               if [[ -n $sn_src && $sn_src_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"sn_src=${sn_src}\" parm format is invalid. It should be 12 digits starting with \"000...\".  Example: \"sn_src=000196801755\"" >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                     >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          # Target SN:
+
+               sn_tgt_vld=0
+
+               if [[ -n $sn_tgt ]];then
+
+                    sn_tgt_vld=$(echo $sn_tgt | $awk 'BEGIN {sn_tgt_vld=1};{sn_tgt=$0;if (sn_tgt!~pat_sn || NF>1) {sn_tgt_vld=0}};END {print sn_tgt_vld}' pat_sn="^$pat_sn$")
+
+               fi
+
+               if [[ -n $sn_tgt && $sn_tgt_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"sn_tgt=${sn_tgt}\" parm format is invalid. It should be 12 digits starting with \"000...\" (ex: \"sn_tgt=000197802076)\"" >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+     # "check/update" "<parm>=<file>" pathing with "[dir|suf]=" :          {"dir=": prepend "<migr_dir>" if no dir in path, "suf=": append <suffix>}
+
+          # If set, verify "dir=<migr_dir>" staging directory:
+
+               dir_vld=0
+
+               if [[ -n $dir && -d $dir ]];then dir_vld=1;fi
+
+               if [[ -n $dir && dir_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"dir=${dir}\" migration staging directory was not found or is not a directory."                      >> $history
+                    print "\n\"verify/update\" $utility CLI \"dir=<migr_dir>\" parm with a valid migration staging directory  & rerun utility." >> $history
+                    print "\nSee History $history file for details.\n"                                                                          >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          # If set, verify "suf=<suffix>" parm:
+
+               suf_vld=0
+
+               if [[ -n $suf ]];then suf_vld=$(echo "$suf" | $awk 'BEGIN {suf_vld=1};NR>1 || NF>1 {suf_vld=0};END {print suf_vld}');fi
+
+               if [[ -n $suf && $suf_vld -eq 0 ]];then
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"suf=${suf}\" parm contains embedded <white_space> (blanks or tabs) which is invalid." >> $history
+                    print "\nTry substituting \"_\" for <white_space> in CLI \"suf=<suffix>\" parm & rerun ${utility}."           >> $history
+                    print "\nSee History $history file for details.\n"                                                            >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          # "check/update" CLI "dir=", "suf=" parms:
+
+               # "$dir": "chk/add" trailing "/":     {ex: "/tmp/holly => /tmp/holly/"}
+
+                    if [[ -n $dir ]];then dir=$(echo $dir | $awk '{dir=$1;if (dir!~/[/]$/) {dir=dir"/"};print dir}' dir="$dir");fi
+
+               # "$suf": "chk/add" leading "_":      {ex: "holly => _holly"}
+
+                    if [[ -n $suf ]];then suf=$(echo $suf | $awk '{suf=$1;if (suf!~/^[_]/) {suf="_"suf};print suf}' suf="$suf");fi
+
+          # "check/capture" CLI import files ("$imports):
+
+                # "check/capture" external "import" files:
+
+                     # "check/capture" "pairs" import file:
+
+                          if [[ $pairs_vld -eq 1 ]];then
+
+                               print "\n     import (\"pairs\"): SRDF Metro migration \"Source/Target\" Symdev pairs file staged in ${pairs}" >> $imports
+
+                          fi
+
+                     # "check/capture" "naa_ext_src" import file:
+
+                          if [[ $naa_ext_src_vld -eq 1 ]];then
+
+                               print "\n     import (\"naa_ext_src\"): Source VMAX (SN: ${sn_src}) \"external\" LUNID list staged in ${naa_ext_src}" >> $imports
+
+                          fi
+
+                     # "check/capture" "lun_tbl_src" import file:
+
+                          if [[ $lun_tbl_src_vld -eq 1 && $opt_l -eq 0 ]];then
+
+                               print "\n     import (\"lun_tbl_src\"): Source VMAX (SN: ${sn_src}) \"internal/external\" LUNID relationships table staged in ${lun_tbl_src}" >> $imports
+
+                          fi
+
+                     # "check/capture" "lun_tbl_tgt" import file:
+
+                          if [[ $lun_tbl_tgt_vld -eq 1 && $opt_l -eq 0 ]];then
+
+                               print "\n     import (\"lun_tbl_tgt\"): Target VMAX (SN: ${sn_tgt}) \"internal/external\" LUNID relationships table staged in ${lun_tbl_tgt}" >> $imports
+
+                          fi
+
+                     # "check/capture" "multipath" import file:
+
+                          if [[ $multi_vld -eq 1 && $opt_m -eq 0 ]];then
+
+                               print "\n     import (\"multipath\"): RHEL native \"multipath -ll\" raw data staged in ${multi}" >> $imports
+
+                          fi
+
+          # If set, apply remaining "$dir/$suf" "parm=<file>" pathing updates for CLI "-elmrs" output files:
+
+                # Prefix "${dir}|/tmp/" & append" migration suffix ("$suf") if CLI "-s" option is set for "$scan_host_fc":
+
+                     if [[ $opt_s -eq 1 ]];then
+
+                          scan_host_fc=${dir}${scan_host_fc}${suf}
+
+                          scan_host_fc=$(echo $scan_host_fc | $awk '{if ($1!~/[/]/) {scan_host_fc="/tmp/"$1} else {scan_host_fc=$1};print scan_host_fc}')
+
+                          rm -rf $scan_host_fc
+
+                          touch $scan_host_fc 2>/dev/null
+
+                     fi
+
+                # Prefix "${dir}|/tmp/" & append" migration suffix ("$suf") for "-l" (create "lun_tbl_[src|tgt]") option:
+
+                     if [[ $opt_l -eq 1 ]];then
+
+                          # "check/append" <migr_suf> to Source "$lun_tbl_src" LUNID table:
+
+                               lun_tbl_src_lcl=lun_tbl_src
+
+                               if [[ $sn_src_vld -eq 1 ]];then
+
+                                    lun_tbl_src_lcl=lun_tbl_src_${sn_src}
+
+                                    if [[ -n $lun_tbl_src ]];then
+
+                                         lun_tbl_src=${lun_tbl_src}${suf}
+
+                                    else
+
+                                         lun_tbl_src=${dir}${lun_tbl_src_lcl}${suf}
+
+                                    fi
+
+                                    lun_tbl_src=$(echo $lun_tbl_src | $awk '{if ($1!~/[/]/) {lun_tbl_src="/tmp/"$1} else {lun_tbl_src=$1};print lun_tbl_src}')
+
+                                    rm -rf $lun_tbl_src
+
+                                    touch $lun_tbl_src 2>/dev/null
+
+                               fi
+
+                          # "check/append" <migr_suf> to Target "$lun_tbl_tgt" LUNID table:
+
+                               lun_tbl_tgt_lcl=lun_tbl_tgt
+
+                               if [[ $sn_tgt_vld -eq 1 ]];then
+
+                                    lun_tbl_tgt_lcl=lun_tbl_tgt_${sn_tgt}
+
+                                    if [[ -n $lun_tbl_tgt ]];then
+
+                                         lun_tbl_tgt=${lun_tbl_tgt}${suf}
+
+                                    else
+
+                                         lun_tbl_tgt=${dir}${lun_tbl_tgt_lcl}${suf}
+
+                                    fi
+
+                                    lun_tbl_tgt=$(echo $lun_tbl_tgt | $awk '{if ($1!~/[/]/) {lun_tbl_tgt="/tmp/"$1} else {lun_tbl_tgt=$1};print lun_tbl_tgt}')
+
+                                    rm -rf $lun_tbl_tgt
+
+                                    touch $lun_tbl_tgt 2>/dev/null
+
+                               fi
+
+                     fi
+
+                # Prefix "${dir}|/tmp/" & append" <migr_suf> to host "$multi" raw multipath file ("-m"):
+
+                     if [[ $opt_m -eq 1 ]];then
+
+                          if [[ -n $multi ]];then
+
+                               multi=${multi}${suf}
+
+                          else
+
+                               multi=${dir}${multi_lcl}${suf}
+
+                          fi
+
+                          multi=$(echo $multi | $awk '{if ($1!~/[/]/) {multi="/tmp/"$1} else {multi=$1};print multi}')
+
+                          rm -rf $multi
+
+                          touch $multi 2>/dev/null
+
+                     fi
+
+                # Prefix "${dir}|/tmp/" & append" migration suffix ("$suf") for "-n" (create "naa_ext_src") option:
+
+                     if [[ $opt_n -eq 1 ]];then
+
+                          # "check/append" <migr_suf> to "$naa_ext_src" "external" Source VMAX LUNID migr_list:
+
+                               naa_ext_src_lcl=naa_ext_src
+
+                               if [[ $sn_src_vld -eq 1 ]];then
+
+                                    naa_ext_src_lcl=naa_ext_src_${sn_src}
+
+                                    if [[ -n $naa_ext_src ]];then
+
+                                         naa_ext_src=${naa_ext_src}${suf}
+
+                                    else
+
+                                         naa_ext_src=${dir}${naa_ext_src_lcl}${suf}
+
+                                    fi
+
+                                    naa_ext_src=$(echo $naa_ext_src | $awk '{if ($1!~/[/]/) {naa_ext_src="/tmp/"$1} else {naa_ext_src=$1};print naa_ext_src}')
+
+                                    rm -rf $naa_ext_src
+
+                                    touch $naa_ext_src 2>/dev/null
+
+                               fi
+
+                     fi
+
+                # "create" $naa_ext_src stage file & prefix "${dir}|/tmp/" & append" <migr_suf> to host "LUN/path" ("summary/details") report file ("-p"):
+
+                     if [[ opt_p -eq 1 ]];then
+
+                          # create LUN path report file
+
+                               paths_rpt=${dir}${paths_rpt}${suf}
+
+                               paths_rpt=$(echo $paths_rpt | $awk '{if ($1!~/[/]/) {paths_rpt="/tmp/"$1} else {paths_rpt=$1};print paths_rpt}')
+
+                               rm -rf $paths_rpt
+
+                               touch $paths_rpt 2>/dev/null
+
+                     fi
+
+                # Initialize Source Array <sd> SCSI "offline/delete" syntax files ("-r"):
+
+                     if [[ $opt_r -eq 1 ]];then
+
+                          # modify "$sd_off_src"
+
+                               if [[ $sn_src_vld -eq 1 ]];then
+
+                                    sd_off_src=run_1st_sd_off_src_${sn_src}
+
+                               else
+
+                                    sd_off_src=run_1st_sd_off_src
+
+                               fi
+
+                               sd_off_src=${dir}${sd_off_src}${suf}
+
+                               sd_off_src=$(echo $sd_off_src | $awk '{if ($1!~/[/]/) {sd_off_src="/tmp/"$1} else {sd_off_src=$1};print sd_off_src}')
+
+                               rm -rf $sd_off_src
+
+                               touch $sd_off_src 2>/dev/null
+
+                          # modify "$sd_del_src"
+
+                               if [[ $sn_src_vld -eq 1 ]];then
+
+                                    sd_del_src=run_2nd_sd_del_src_${sn_src}
+
+                               else
+
+                                    sd_del_src=run_2nd_sd_del_src
+
+                               fi
+
+                               sd_del_src=${dir}${sd_del_src}${suf}
+
+                               sd_del_src=$(echo $sd_del_src | $awk '{if ($1!~/[/]/) {sd_del_src="/tmp/"$1} else {sd_del_src=$1};print sd_del_src}')
+
+                               rm -rf $sd_del_src
+
+                               touch $sd_del_src 2>/dev/null
+
+                     fi
+
+     # "check/update" SRDF Metro History file with migration topology diagram:
+
+          migr_dgm=""
+
+          if [[ -n $sn_src && -n $sn_tgt ]];then
+
+              # Determine Array & Model of Source SN:
+
+                   array_src=$(echo $sn_src | $awk '{array="<tbd>"
+                                                     model_typ=substr($1,6,2)
+                                                     if (model_typ=="68") {array="VMAX"}
+                                                     if (model_typ=="67") {array="VMAX"}
+                                                     if (model_typ=="72") {array="VMAX"}
+                                                     if (model_typ=="78") {array="VMAX"}
+                                                     if (model_typ=="70") {array="VMAX"}
+                                                     if (model_typ=="75") {array="VMAX"}
+                                                     if (model_typ=="77") {array="VMAX"}
+                                                     if (model_typ=="79") {array="PMAX"}
+                                                     if (model_typ=="76") {array="PMAX"}
+                                                     print array}')
+
+                   model_src=$(echo $sn_src | $awk '{model="<tbd>"
+                                                     model_typ=substr($1,6,2)
+                                                     if (model_typ=="68") {model="100K"}
+                                                     if (model_typ=="67") {model="200K"}
+                                                     if (model_typ=="72") {model="400K"}
+                                                     if (model_typ=="78") {model="250F"}
+                                                     if (model_typ=="70") {model="450F"}
+                                                     if (model_typ=="75") {model="850F"}
+                                                     if (model_typ=="77") {model="9505"}
+                                                     if (model_typ=="79") {model="2000"}
+                                                     if (model_typ=="76") {model="8000"}
+                                                     print model}')
+
+              # Determine Array & Model of Target SN:
+
+                   array_tgt=$(echo $sn_tgt | $awk '{array="<tbd>"
+                                                     model_typ=substr($1,6,2)
+                                                     if (model_typ=="68") {array="VMAX"}
+                                                     if (model_typ=="67") {array="VMAX"}
+                                                     if (model_typ=="72") {array="VMAX"}
+                                                     if (model_typ=="78") {array="VMAX"}
+                                                     if (model_typ=="70") {array="VMAX"}
+                                                     if (model_typ=="75") {array="VMAX"}
+                                                     if (model_typ=="77") {array="VMAX"}
+                                                     if (model_typ=="79") {array="PMAX"}
+                                                     if (model_typ=="76") {array="PMAX"}
+                                                     print array}')
+
+                   model_tgt=$(echo $sn_tgt | $awk '{model="<tbd>"
+                                                     model_typ=substr($1,6,2)
+                                                     if (model_typ=="68") {model="100K"}
+                                                     if (model_typ=="67") {model="200K"}
+                                                     if (model_typ=="72") {model="400K"}
+                                                     if (model_typ=="78") {model="250F"}
+                                                     if (model_typ=="70") {model="450F"}
+                                                     if (model_typ=="75") {model="850F"}
+                                                     if (model_typ=="77") {model="9505"}
+                                                     if (model_typ=="79") {model="2000"}
+                                                     if (model_typ=="76") {model="8000"}
+                                                     print model}')
+
+               # Create SRDF Metro Migration Topology Diagram:
+
+                    migr_dgm="$(echo "Migr_Topology:  ${array_src}${model_src}_${sn_src} >=====> ${array_tgt}${model_tgt}_${sn_tgt}")"
+
+          fi
+
+          if [[ -n $sn_src && -n $sn_tgt && -n $rdfg_src && -n $rdfg_tgt ]];then
+
+                migr_dgm="$(echo "Migr_Topology:  ${array_src}${model_src}_${sn_src} >===(${rdfg_src}--RDFG--${rdfg_tgt})===> ${array_tgt}${model_tgt}_${sn_tgt}")"
+
+          fi
+
+          if [[ -n $migr_dgm ]];then print "\n${migr_dgm}" >> $history;fi
+
+}
+
+adt_cmd () {
+
+# Syntax: adt_cmd "$cmd" "$out" "$log" "[new|add]"                                                           # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: process Solutions Enabler commands (add "Cmd/RC/Std_Err" data to $history file).  If optional "append" ($4) not specified, net new output file is created.
+
+# Code:
+
+     # Process command run by utility:
+
+          if [[ $4 = new ]];then
+
+               $sudo $1 >  $2 2>&1;rc=$?
+
+          fi
+
+          if [[ $4 = add ]];then
+
+               $sudo $1 >> $2 2>&1;rc=$?
+
+          fi
+
+          print "\n     RC: $rc   Cmd: $1"                                       >> $3
+
+          if [[ $rc -ne 0 && -s $2 ]];then $awk '{printf("%12s %s\n",FS,$0)}' $2 >> $3;fi
+
+}
+
+adt_ext () {
+
+# Syntax: adt_ext "$rc" "$log" "$history"                                                                     # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: Check $rc for most recently run command.  If $rc non-zero, issue error msg & exit.
+
+# Code:
+
+     if   [[ $1 -ne 0 ]];then                                                                                 # {Check command return code.  If non-zero $rc, issue error msg & exit.}
+          print "\nReliable audit requires accurate command output."         >> $2
+          print "\nWork with vendor to resolve issue and then retry audit."  >> $2
+          print "\nSee $3 for details."                                      >> $2
+          print "\nEnd Timestamp: $(date '+%Y-%m-%d_%H:%M:%S_%Z')\n"         >> $2
+          dup_nul "$2" "$3"
+          cat $3
+          exit $1
+     fi
+
+}
+
+adt_lid () {
+
+# Syntax: adt_lid "<input_file>" "<output_file>" ""vmax_int_ext_lunid_tbl"
+
+# Description: function creates formatted "internal/external" LUNID lookup table.
+
+# Sample Call: adt_lid "$lun_raw_src_lcl" "$lun_tbl_src" "vmax_int_ext_lunid_tbl"
+
+# Code:
+
+     # Create VMAX "internal/external" LUNID relationships table:
+
+          if [[ $3 = vmax_int_ext_lunid_tbl ]];then
+
+               $awk 'function dec_to_hex (str) {str_dec=substr(str,match(str,"[0-9]"));b16_sub=1;b16_mod=16
+                                                str_hex="";if (str_dec ~ /^0+$/) {str_hex=0}
+                                                table_dec="0__1__2__3__4__5__6__7__8__9__10_11_12_13_14_15"
+                                                table_hex_lc="0123456789abcdef";table_hex_uc="0123456789ABCDEF"
+                                                table_hex=table_hex_lc;if (str ~ /^D/) {table_hex=table_hex_uc}
+                                                if (str_hex !=0) {
+                                                     while (str_dec >0) {
+                                                          char_dec=str_dec%b16_mod/b16_sub
+                                                          idx_char_dec=index(table_dec,char_dec)
+                                                          idx_char_hex=(idx_char_dec-1)/3+1
+                                                          char_hex=substr(table_hex,idx_char_hex,1)
+                                                          str_dec=str_dec-(b16_sub*char_dec)
+                                                          b16_sub=16*b16_sub;b16_mod=16*b16_mod
+                                                          str_hex=char_hex""str_hex}}
+                                                return str_hex}
+
+                     function tbl_hex_asc (range) {table_hex_asc="";num_elem=split(range,ary_rng,",");beg=ary_rng[1];end=ary_rng[2]
+                                                   for (i=beg;i<=end;i++) {byte_hex=sprintf("%02s",dec_to_hex(i))
+                                                                           table_hex_asc=sprintf("%sx%s_a%c,",table_hex_asc,byte_hex,i)}
+                                                   return table_hex_asc}
+
+                     function hex_to_asc (str) {str_asc="";str_hex=tolower(str)
+                                                while (length(str_hex)%2>0) {str_hex="0"str_hex}
+                                                for (i=1;i<length(str_hex);i+=2) {
+                                                     char_hex=substr(str_hex,i,2)
+                                                     char_asc=substr(table_hex_asc,index(table_hex_asc,"x"char_hex)+5,1)
+                                                     str_asc=str_asc""char_asc}
+                                                return str_asc}
+
+                                          BEGIN {
+                                                 table_hex_asc=tbl_hex_asc("0,127")
+                                                 print "SN_int Dev_int LUNID_int LUNID_ext SN_ext Dev_ext Type Sts Cyl MB"
+                                                }
+                               /^Symmetrix ID:/ {
+                                                 sn_int=$NF
+                                                }
+                        /Device Symmetrix Name/ {
+                                                 symdev_int=$NF
+                                                 fnd_ext=0
+                                                }
+                              /Device Capacity/ {fnd_cap=1}
+                                    /Cylinders/ {if (fnd_cap==1) {cyl=$NF}}
+                                    /MegaBytes/ {if (fnd_cap==1) {mb=$NF}}
+                     /Device External Identity/ {
+                                                 fnd_ext=1
+                                                 fnd_cap=0
+                                                }
+                                   /Device WWN/ {
+                                                 if (fnd_ext==0) {lunid_int=$NF}
+                                                 if (fnd_ext==1) {
+                                                                  lunid_ext=$NF
+                                                                  sn_ext=substr(lunid_ext,9,12)
+                                                                  symdev_ext=hex_to_asc(substr(lunid_ext,23))
+                                                                 }
+                                                }
+                         /Device Configuration/ {type=$NF}
+                                /Device Status/ {
+                                                 sts=substr($NF,2,length($NF)-2)
+                                                 if (symdev_int!~/ACLX/) {print sn_int,symdev_int,lunid_int,lunid_ext,sn_ext,symdev_ext,type,sts,cyl,mb}
+                                                }' $1 | column -t> $2
+
+          fi
+
+}
+
+adt_msk () {
+
+# Syntax: adt_msk "<SN_[src|tgt]>" "aclx_bkup"
+
+# Description: backups VMAX ACLX (Access Control Logix) masking DB for <SN_[src|tgt]>
+
+# Sample Call: adt_msk "$sn_src" "aclx_bkup"
+
+# Note: If run on SRDF Metro migration host, copy to GIS <SAN_mgmt_host> ACLX DB backup repository.
+
+# Code:
+
+     if [[ $2 = "aclx_bkup" ]];then
+
+          # "check/create" ACLX (Access Control Logix) masking DB dir:
+
+               aclx_dir=/var/symcli/backups
+
+               if [[ ! -d $aclx_dir ]];then $sudo mkdir -p $aclx_dir;fi
+
+          # Backup <SN_[src|tgt]> ACLX masking DB:
+
+               aclxdb=${aclx_dir}/aclxdb_${1}_${ts}${suf}
+
+               cmd="symaccess -sid $1 backup -file $aclxdb -noprompt"
+               out="${tmp}_aclx_msk"
+               adt_cmd "$cmd" "$out" "$log" "new"
+               adt_ext "$rc"  "$log" "$history"
+
+               echo $aclxdb
+
+     fi
+
+}
+
+adt_pth () {
+
+# Syntax: adt_pth <raw_multipath_-ll: input_file> <path_report: output_file> <utility_stage_dir> <naa_ext_src_vld: 0|1> <naa_ext_src: ext_LUNID_migr_list>
+#
+# Description: Creates RHEL native "multipath -ll" "LUN/Path" report ("summary/details"), LUN types ("SAN, GK, Lcl"), warn if "SAN" LUNs < 4 paths.
+#              Function always returns "details/summary" content for all LUNs provisioned on the host being audited grouped by "LUN size, path status, ...".
+#              If "<naa_ext_src_vld: 1> (true) & <naa_ext_src>", adt_pth returns "details/summary" content for Source VMAX "migr_only" external LUNIDs.
+#
+#                         $1         $2        $3           $4               $5
+# Sample Call: adt_pth "$multi" "$paths_rpt" "$tmp" "$naa_ext_src_vld" "$naa_ext_src"
+#
+# Code:
+
+     # "define/initialize" "details/summary" temporary stage files ("host_all/migr_only"LUNs):
+
+          # "define/initialize" paths report "$tmp" stage file:
+
+                     paths_rpt_stg=${3}_paths_rpt_stg             # {Set  RHEL native "multipath -ll" "$tmp" "LUN/path" report stage file}
+
+                     touch $paths_rpt_stg    2>/dev/null          # {Init RHEL native "multipath -ll" "$tmp" "LUN/path" report stage file}
+
+          # "define/initialize" "details/summary" stage files for "all" host LUNs:
+
+                    paths_det_all=${3}_paths_det_all_stg          # {Set  RHEL native "multipath -ll" "LUN/path" "details" "$tmp" stage file (host LUNs: all)}
+                    paths_sum_all=${3}_paths_sum_all_stg          # {Set  RHEL native "multipath -ll" "LUN/path" "summary" "$tmp" stage file (host LUNs: all)}
+
+                    touch  $paths_det_all    2>/dev/null          # {Init RHEL native "multipath -ll" "LUN/path" "details" "$tmp" stage file (host LUNs: all)}
+                    touch  $paths_sum_all    2>/dev/null          # {Init RHEL native "multipath -ll" "LUN/path" "summary" "$tmp" stage file (host LUNs: all)}
+
+          # "define/initialize" "details/summary" stage files for "migr_only" host LUNs:     {only if <naa_ext_src_vld> "true: 1"}
+
+               if [[ $4 -eq 1 ]];then
+
+                    paths_det_met=${3}_paths_det_met_stg          # {Set  RHEL native "multipath -ll" "LUN/path" "details" "$tmp" stage file (migr LUNs: only)}
+                    paths_sum_met=${3}_paths_met_met_stg          # {Set  RHEL native "multipath -ll" "LUN/path" "summary" "$tmp" stage file (migr LUNs: only)}
+
+                    touch  $paths_det_met    2>/dev/null          # {Init RHEL native "multipath -ll" "LUN/path" "details" "$tmp" stage file (migr LUNs: only)}
+                    touch  $paths_sum_met    2>/dev/null          # {Init RHEL native "multipath -ll" "LUN/path" "summary" "$tmp" stage file (migr LUNs: only)}
+
+               fi
+
+     # Create overall host "LUN/Path" details file:          {"details" for all LUNs on host}
+
+          $awk 'function prt_lun () {
+                                     if (num_paths==0) {
+                                                        platform="<tbd>"
+                                                        pathset="<tbd>"
+                                                        sts="<tbd>"
+                                                       }
+                                     if (num_paths >0) {
+                                                        asort(ary_vhbas)
+                                                        asort(ary_vhba_sts)
+                                                        dif_sts=0
+                                                        sts_csv=""
+                                                        for (p=1; p<=num_paths; p++) {
+                                                                                      pathset=pathset","ary_vhbas[p]
+                                                                                      sts_cmp2=substr(ary_vhba_sts[p],index(ary_vhba_sts[p],":")+1)
+                                                                                      sts_csv=sts_csv","sts_cmp2
+                                                                                      if (sts_cmp1!=sts_cmp2) {dif_sts=1}
+                                                                                     }
+                                                        pathset=substr(pathset,2)
+                                                        sts_csv=substr(sts_csv,2)
+                                                        sts=sts_cmp1
+                                                        if (dif_sts==1) {sts=sts_csv}
+                                                       }
+                                     print date,host,lunid,platform,size,pathset,num_paths,sts,lun_typ
+                                    }
+
+                      BEGIN {
+                             lunid="-"
+                             num_luns=0
+                             num_paths=0
+                             pat_scsi="[0-9]+:[0-9]+:[0-9]+:[0-9]+"
+                             pat_san=":000097:00a098:0a9800:24a937:f47acc:0024f4:d05fce:3c912b:"
+                             pat_trn=":VMAX--:cDOT--:7Mode-:PureFA:SldFre:KmnRio:HDS---:Vexata:"
+                            }
+                   $3~/dm-/ {
+                             ++num_luns
+                             if (num_luns>1) {prt_lun()}
+                             num_paths=0
+                             pathset=""
+                             size=""
+                             gsub(/^,/,"",$NF)
+                             platform=""
+                             for (f=4; f<=NF; f++) {
+                                                    sub(/^,/,"",$f)
+                                                    platform=platform","$f
+                                                   }
+                             platform=substr(platform,2)
+                             lun_typ="-"
+                             pat_oui="-"
+                             if (length($2)==35) {                                    # "mpathe (360000970000196801695533030333332) dm-3 EMC ,SYMMETRIX"
+                                                  lunid=substr($2,3,32)
+                                                  pat_oui=":"substr($2,4,6)":"
+                                                 }
+                             if (length($2)==19) {                                    # "mpathr (20024f40068900007) dm-27 KMNRIO ,K2"
+                                                  lunid=substr($2,2,17)
+                                                   pat_oui=":"substr($2,3,6)":"
+                                                  }
+                             if ($2~/_/)          {                                   # "mpathb (Mircon_5100_MTFDDAV240TCB_18241CE9CFD4) dm-118 ATA     ,Mircon_5100_MTFD"
+                                                  lunid=substr($2,2,length($2)-2)
+                                                   pat_oui="-"
+                                                  }
+                             if (pat_san~pat_oui) {lun_typ="SAN"}
+                            }
+                 $1~/size=/ {
+                             size=substr($1,match($1,/[0-9]/),match($1,/[[:upper:]]/)-index($1,"="))
+                             if (platform~/SYMMETRIX/ && size=="5.6M") {lun_typ="GK"}
+                            }
+                $2~pat_scsi {
+                             ++num_paths
+                             if (num_paths==1) {
+                                                sts_cmp1=""
+                                                for (c=5; c<=NF; c++) {sts_cmp1=sts_cmp1"_"$c}
+                                                sts_cmp1=substr(sts_cmp1,2)
+                                               }
+                             split($2,ary_adr,":")
+                             vhba=ary_adr[1]
+                             ary_vhbas[num_paths]=vhba
+                             sts=""
+                             for (c=5; c<=NF; c++) {sts=sts"_"$c}
+                             sts=substr(sts,2)
+                             vhba_sts=vhba":"sts
+                             ary_vhba_sts[num_paths]=vhba_sts
+                            }
+                        END {prt_lun()}
+                     ' date="$date" host="$host" $1 | column -t | sort -k5,5 |\
+          $awk 'BEGIN {print "Date Hostname LUN_ID Platform Size Pathset #_Paths Status Type"}
+                      {print $0}' | column -t |\
+          $awk '/^Date/ {
+                         print $0
+                         idx_sub0_1=index($0,"Date")
+                         len_sub0_1=index($0,"#_Paths")-idx_sub0_1-1
+                         idx_sub0_2=index($0,"Status")
+                        }
+               /^[0-9]/ {
+                         rec_sub0_1=substr($0,idx_sub0_1,len_sub0_1)
+                         rec_sub0_2=substr($0,idx_sub0_2)
+                         printf("%s %4s     %s\n",rec_sub0_1,$7,rec_sub0_2)
+                        }' |\
+          $awk 'BEGIN {print ""};{print $0}' |\
+          $awk 'BEGIN {print "\nHost LUN Details:      {All Host LUNs}"};{print $0};END {print ""}' > $paths_det_all
+
+     # Create host overall "LUN/Path" summary file:          {"summary" for all LUNs on host}
+
+          $awk '/^[0-9]/{print $4,$5,$6,$7,$8,$9}' $paths_det_all | sort | uniq -c | column -t | sort -k3,3 |\
+          $awk 'BEGIN {print "Date Hostname #_LUNs Platform Size Pathset #_Paths Status Role"}
+                      {print date,host,$0}
+               ' date="$date" host="$host" | column -t |\
+          $awk '/^Date/ {
+                         print $0
+                         idx_sub0_1=index($0,"Date")
+                         len_sub0_1=index($0,"#_LUNs")-idx_sub0_1-1
+                         idx_sub0_2=index($0,"Platform")
+                         len_sub0_2=index($0,"#_Paths")-idx_sub0_2-1
+                        }
+               /^[0-9]/ {
+                         rec_sub0_1=substr($0,idx_sub0_1,len_sub0_1)
+                         rec_sub0_2=substr($0,idx_sub0_2,len_sub0_2)
+                         printf("%s %6s  %s %4s     %s  %s\n",rec_sub0_1,$3,rec_sub0_2,$7,$8,$9)
+                        }' | column -t |\
+          $awk 'BEGIN {print ""};{print $0};END {print ""}' |\
+          $awk 'BEGIN {print "\nHost LUN Summary:      {All Host LUNs}"};{print $0};END {print ""}' > $paths_sum_all
+
+     # "check/create SRDF Metro only "LUN/Path" "details/summary" files:     {SRDF Metro LUNs only (<naa_ext_src_vld> "true: 1")}
+
+          if [[ $4 -eq 1 ]];then
+
+               # Create SRDF Metro "migr_only" "summary" file
+
+                    egrep -f $5 $paths_det_all |\
+                    $awk 'BEGIN {print "Date Hostname LUN_ID Platform Size Pathset #_Paths Status Type"}
+                                {print $0}' | column -t |\
+                    $awk 'BEGIN {print ""};{print $0}' |\
+                    $awk 'BEGIN {print "\nMetro LUN Details:     {SRDF Metro LUNs only}"};{print $0};END {print ""}' > $paths_det_met
+
+               # Create SRDF Metro "migr_only" "summary" file
+
+                    $awk '/^[0-9]/{print $4,$5,$6,$7,$8,$9}' $paths_det_met | sort | uniq -c | column -t | sort -k3,3 |\
+                    $awk 'BEGIN {print "Date Hostname #_LUNs Platform Size Pathset #_Paths Status Role"}
+                                {print date,host,$0}
+                         ' date="$date" host="$host" | column -t |\
+                    $awk '/^Date/ {
+                                   print $0
+                                   idx_sub0_1=index($0,"Date")
+                                   len_sub0_1=index($0,"#_LUNs")-idx_sub0_1-1
+                                   idx_sub0_2=index($0,"Platform")
+                                   len_sub0_2=index($0,"#_Paths")-idx_sub0_2-1
+                                  }
+                         /^[0-9]/ {
+                                   rec_sub0_1=substr($0,idx_sub0_1,len_sub0_1)
+                                   rec_sub0_2=substr($0,idx_sub0_2,len_sub0_2)
+                                   printf("%s %6s  %s %4s     %s  %s\n",rec_sub0_1,$3,rec_sub0_2,$7,$8,$9)
+                                  }' | column -t |\
+                    $awk 'BEGIN {print ""};{print $0};END {print ""}' |\
+                    $awk 'BEGIN {print "\nMetro LUN Summary:     {SRDF Metro LUNs only}"};{print $0};END {print ""}' > $paths_sum_met
+
+          fi
+
+     # Create "LUN/Path" combined "summary/details" output file ("$paths: /tmp/lun_paths_<hostname>"):
+
+          #                         $1         $2        $3           $4               $5
+          # Sample Call: adt_pth "$multi" "$paths_rpt" "$tmp" "$naa_ext_src_vld" "$naa_ext_src"
+
+          #    $paths_sum_met          # {RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (migr LUNs: only)}     {1st file}
+          #    $paths_sum_all          # {RHEL native "multipath -ll" "LUN/path" "summary" "tmp" file (host LUNs: all)}      {2nd file}
+          #    $paths_det_met          # {RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (migr LUNs: only)}     {3rd file}
+          #    $paths_det_all          # {RHEL native "multipath -ll" "LUN/path" "details" "tmp" file (host LUNs: all)}      {4th file}
+
+          if [[ $4 -eq 1 ]];then cat $paths_sum_met >> $paths_rpt_stg;fi
+
+                                 cat $paths_sum_all >> $paths_rpt_stg
+
+          if [[ $4 -eq 1 ]];then cat $paths_det_met >> $paths_rpt_stg;fi
+
+                                 cat $paths_det_all >> $paths_rpt_stg
+
+          dup_nul                    "$paths_rpt_stg" "$paths_rpt"
+
+}
+
+adt_rmv () {
+
+# Syntax: adt_rmv "<Source_only_multipath-ll_input_file>" "<SN_src_external_LUNID_input_file>" "sd_remove"
+
+# Description: function creates formatted table or syntax file from provided input file(s), parm(s).
+
+# Sample Call: adt_rmv "$multi" "$naa_ext_src" "sd_remove"
+
+# Code:
+
+     # Create <sd> SCSI device mpath <LUNID> search file & related <sd> path "offline/delete" files:
+
+          # pat_lunid="6000097[[:xdigit:]]${pat_sn}${pat_hex6}${pat_hex6}"                          # {$pat_lunid  pattern: VMAX LUNID: "6000097.<12 digit SN><6 hex_bytes>"}
+          # pat_sd="[[:blank:]][0-9]+:[0-9]+:[0-9]+:[0-9]+[[:blank:]]+sd[a-z]+[[:blank:]]"          # {$pat_sd     pattern: DS: "Smultipath -ll" (use: "awk '$0~pat_sd ..."}
+
+          if [[ $3 = sd_remove ]];then
+
+               # Create RHEL host native multipath <sd> SCSI device mpath external <LUNID> search file:
+
+                    $awk  '$0~/dm-/ {
+                                     fnd_vmax=0
+                                     if ($2~pat_lunid) {fnd_vmax=1;lunid=$2}
+                                    }
+                          $0~pat_sd {if (fnd_vmax==1) {
+                                                       sub_sd=substr($0,index($0,"sd"))
+                                                       split(sub_sd,ary_sub_sd," ")
+                                                       sd=ary_sub_sd[1]
+                                                       print lunid,sd
+                                                      }
+                                    }' pat_lunid="$pat_lunid" pat_sd="$pat_sd" $1 | column -t | egrep -f $2 > ${tmp}_sd_srch_flt
+
+               # Create RHEL host native multipath <sd> SCSI device "offline" ("run_1st_sd_off_src_...") syntax file:
+
+                    $awk '{
+                           sd=$NF
+                           print "echo \"offline "sd"\"; echo offline > /sys/block/"sd"/device/state; sleep 1"
+                          }' ${tmp}_sd_srch_flt | column -t > $sd_off_src
+
+               # Create RHEL host native multipath <sd> SCSI device "delete" ("run_2nd_sd_del_src_...") syntax file:
+
+                    $awk '{
+                           sd=$NF
+                           print "echo \"delete "sd"\"; echo 1 > /sys/block/"sd"/device/delete; sleep 1"
+                          }' ${tmp}_sd_srch_flt | column -t > $sd_del_src
+
+          fi
+
+}
+
+adt_cmn () {
+
+# Syntax: adt_cmn
+
+# Description: Capture "Local/Remote" VMAXs visible to audit host and set related common variables.
+
+# Code:
+
+     # {Utility audit start message}
+
+          print "\nBegin $utility audit on host $host (${ts})."
+
+     # If CLI "-d" ("discover") set, run "symcfg discover":
+
+          if [[ $opt_d -eq 1 ]];then
+
+               print "\nRunning \"symcfg discover\" on $host.  May take a few minutes. Please be patient..."
+
+               cmd="symcfg discover"
+               out="${tmp}_dis_cmn"
+               adt_cmd "$cmd" "$out" "$log" "new"
+               adt_ext "$rc" "$log" "$history"
+
+               print "\n     \"-d\" (\"discover\"):  VMAX \"symcfg discover\" was run on host ${host}." >> $actions
+
+          fi
+
+     # If CLI "-a" ("aclx_bkup") set, backup <SN_[src|tgt] ACLX (Access Control LogiX) masking DB:
+
+          if [[ $opt_a -eq 1 ]];then
+
+               # "check/backup" VMAX Source SN ACLX masking DB ("$sn_src"):
+
+                    if [[ $sn_src_vld -eq 1 ]];then
+
+                         aclx_bkup_src=$(adt_msk "$sn_src" "aclx_bkup")
+
+                         if [[ -a $aclx_bkup_src ]];then
+
+                              print "\n     \"-a\" (\"aclx_bkup\"): Source VMAX ACLX masking DB backed up to $aclx_bkup_src on $host (if migr_host copy to SAN_mgmt_host)." >> $outputs
+
+                         fi
+
+                    fi
+
+               # "check/backup" VMAX Target SN ACLX masking DB ("$sn_tgt"):
+
+                    if [[ $sn_tgt_vld -eq 1 ]];then
+
+                         aclx_bkup_tgt=$(adt_msk "$sn_tgt" "aclx_bkup")
+
+                         if [[ -a $aclx_bkup_tgt ]];then
+
+                              print "\n     \"-a\" (\"aclx_bkup\"): Target VMAX ACLX masking DB backed up to $aclx_bkup_tgt on $host (if migr_host copy to SAN_mgmt_host)." >> $outputs
+
+                         fi
+
+                    fi
+
+          fi
+
+     # If CLI "-l", "check/create" VMAX "internal/external" LUNID relationship table(s):
+
+          if [[ $opt_l -eq 1 ]];then
+
+               # "check/create" for Source VMAX ("$sn_src"):
+
+                    if [[ $sn_src_vld -eq 1 ]];then
+
+                         cmd="symdev -sid $sn_src list -v"
+                         out="$lun_raw_src_lcl"
+                         adt_cmd "$cmd" "$out" "$log" "new"
+                         adt_ext "$rc"  "$log" "$history"
+
+                         adt_lid "$lun_raw_src_lcl" "$lun_tbl_src" "vmax_int_ext_lunid_tbl"
+
+                         # Validate internally created "$lun_tbl_src":
+
+                              if [[ -s $lun_tbl_src && -r $lun_tbl_src ]];then
+
+                                   lun_tbl_src_vld=$($awk  'BEGIN {lun_tbl_src_vld=1;num_pat_lunid=0}
+                                                     $3~pat_lunid {
+                                                                   ++num_pat_lunid
+                                                                   if (NF!=10)                           {lun_tbl_src_vld=0}
+                                                                   if ($4!~pat_lunid)                    {lun_tbl_src_vld=0}
+                                                                   if ($1!~pat_sn     || $5!~pat_sn)     {lun_tbl_src_vld=0}
+                                                                   if ($2!~pat_symdev || $6!~pat_symdev) {lun_tbl_src_vld=0}
+                                                                  }
+                                                              END {
+                                                                   if (num_pat_lunid==0) {lun_tbl_src_vld=0}
+                                                                   print lun_tbl_src_vld
+                                                                  }' pat_lunid="$pat_lunid" pat_sn="^${pat_sn}$" pat_symdev="^${pat_symdev}$" $lun_tbl_src)
+
+                              fi
+
+
+                         if [[ $lun_tbl_src_vld -eq 1 ]];then
+
+                              print "\n     \"-l\" (\"lun_tbl\"): Source VMAX \"internal/external\" LUNID relationships table created in ${lun_tbl_src}" >> $outputs
+
+                         fi
+
+                    fi
+
+               # "check/create" for Target VMAX ("$sn_tgt"):
+
+                    if [[ $sn_tgt_vld -eq 1 ]];then
+
+                         cmd="symdev -sid $sn_tgt list -v"
+                         out="$lun_raw_tgt_lcl"
+                         adt_cmd "$cmd" "$out" "$log" "new"
+                         adt_ext "$rc"  "$log" "$history"
+
+                         adt_lid "$lun_raw_tgt_lcl" "$lun_tbl_tgt" "vmax_int_ext_lunid_tbl"
+
+                         # Validate internally created "$lun_tbl_tgt":
+
+                              if [[ -s $lun_tbl_tgt && -r $lun_tbl_tgt ]];then
+
+                                   lun_tbl_tgt_vld=$($awk  'BEGIN {lun_tbl_tgt_vld=1;num_pat_lunid=0}
+                                                     $3~pat_lunid {
+                                                                   ++num_pat_lunid
+                                                                   if (NF!=10)                           {lun_tbl_tgt_vld=0}
+                                                                   if ($4!~pat_lunid)                    {lun_tbl_tgt_vld=0}
+                                                                   if ($1!~pat_sn     || $5!~pat_sn)     {lun_tbl_tgt_vld=0}
+                                                                   if ($2!~pat_symdev || $6!~pat_symdev) {lun_tbl_tgt_vld=0}
+                                                                  }
+                                                              END {
+                                                                   if (num_pat_lunid==0) {lun_tbl_tgt_vld=0}
+                                                                   print lun_tbl_tgt_vld
+                                                                  }' pat_lunid="$pat_lunid" pat_sn="^${pat_sn}$" pat_symdev="^${pat_symdev}$" $lun_tbl_tgt)
+
+                              fi
+
+                         if [[ $lun_tbl_tgt_vld -eq 1 ]];then
+
+                              print "\n     \"-l\" (\"lun_tbl\"): Target VMAX \"internal/external\" LUNID relationships table created in ${lun_tbl_tgt}" >> $outputs
+
+                         fi
+
+                    fi
+
+          fi
+
+     # If CLI "-m" ("multipath") set, create raw RHEL native "multipath -ll" file:
+
+          if [[ opt_m -eq 1 ]];then
+
+               cmd="multipath -ll"
+               out="$multi"
+               adt_cmd "$cmd" "$out" "$log" "new"
+               adt_ext "$rc"  "$log" "$history"
+
+               # Validate internally created RHEL native "multipath -ll" file:
+
+                    if [[ -s $multi && -r $multi ]];then
+
+                         multi_vld=$($awk       'BEGIN {multi_vld=1;num_dm=0;fnd_dm=1;fnd_size=1;fnd_policy=1;fnd_sd=1}
+                                             $3~/^dm-/ {++num_dm}
+                                           $1~/^size=/ {if ($2!~/^features=/)            {fnd_size=0}}
+                                          $2~/^policy/ {if ($NF!~/^status=/)             {fnd_policy=0}}
+                                              $3~/^sd/ {if  ($0!~pat_sd)                 {fnd_sd=0}}
+                                                   END {if (num_dm==0) {fnd_dm=0}
+                                                        fnd_multi=(fnd_dm+fnd_size+fnd_policy+fnd_sd)
+                                                        if (fnd_multi!=4) {multi_vld=0};print multi_vld}' pat_sd="$pat_sd" $multi)
+
+               fi
+
+                    if [[ $multi_vld -eq 1 ]];then
+
+                         print "\n     \"-m\" (\"multipath\"): RHEL native \"multipath -ll\" raw data file for host $host created in ${multi}" >> $outputs
+
+               fi
+
+          fi
+
+     # If CLI "-n" ("naa_ext") set, create Source VMAX "external" LUNID migration list:
+
+          if [[ $opt_n -eq 1 ]];then
+
+               # "check/create" $naa_ext_src:
+
+                    if [[ $pairs_vld -eq 1 && $sn_src_vld -eq 1 && $lun_tbl_src_vld -eq 1 ]];then
+
+                         $awk '($0~pat_pairs && length($1)==5 && length($2)==5) {
+                                                                                 dev_src=$1
+                                                                                 print "^"sn_src"  "dev_src
+                                                                                }
+                              ' pat_pairs="$pat_pairs" sn_src="$sn_src" $pairs > $sn_dev_src_lcl
+
+                         egrep -f $sn_dev_src_lcl $lun_tbl_src | $awk '{print $4}' > $naa_ext_src
+
+                    fi
+
+               # Validate locally created "naa_ext_src" Source external LUNID list format (single column, 16 bytes):
+
+                    naa_ext_src_vld=0
+
+                    if [[ -s $naa_ext_src && -r $naa_ext_src ]];then
+
+                         naa_ext_src_vld=$($awk 'BEGIN {num_naa_ext_src=0;naa_ext_src_vld=1}
+                                                       {++num_naa_ext_src;if ($0!~pat_lunid) {naa_ext_src_vld=0}}
+                                                   END {
+                                                        if (num_naa_ext_src==0) {naa_ext_src_vld=0}
+                                                        print naa_ext_src_vld
+                                                       }' pat_lunid="^${pat_lunid}$" $naa_ext_src)
+
+                    fi
+
+               # Record local Source array "$naa_ext_src" file in "$outputs" file:
+
+                    if [[ $naa_ext_src_vld -eq 1 ]];then
+
+                         print "\n     \"-n\" (\"naa_ext\"): Source VMAX NAA \"external\" LUNID migration list created in ${naa_ext_src}" >> $outputs
+
+                    fi
+
+          fi
+
+     # If CLI "-p" ("paths") set & valid "$multi", ["naa_ext_src"] create RHEL native "multipath -ll" "LUN/path" report ("summary/details"):
+
+          if [[ opt_p -eq 1 ]];then
+
+               if [[ $multi_vld -eq 1 ]];then
+
+                    adt_pth "$multi" "$paths_rpt" "$tmp" "$naa_ext_src_vld" "$naa_ext_src"
+
+                    if [[ -s $paths_rpt && -r $paths_rpt ]];then
+
+                         print "\n     \"-p\" (\"paths\"): RHEL native \"multipath -ll\" \"LUN/path\" report for host $host created in ${paths_rpt}" >> $outputs
+
+                    fi
+
+               else
+
+                    rc=1
+                    print "\nRC: $rc, CLI \"-p\" (\"paths\") option requires valid RHEL native \"multipath -ll\" raw input file.  See $utility docs on how to create." >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                 >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          fi
+
+     # If CLI "-r" ("remove") set, create syntax to "offline/delete" migration source LUN <sd> SCSI devices:
+
+          if [[ $opt_r -eq 1 ]];then
+
+               # Create Migration Source <sd> "offline/delete" syntax if valid (pre_target_scan) "$naa_ext_src" & "$multi" exist:
+
+                    if [[ $naa_ext_src_vld -eq 1 && $multi_vld -eq 1 ]];then
+
+                         adt_rmv "$multi" "$naa_ext_src" "sd_remove"
+
+                    else
+
+                         rc=1
+                         print "\nRC: $rc, couldn't create CLI \"-r\" (remove) Source <sd> SCSI device \"offline/delete\" syntax due to one or more required inputs missing."     >> $history
+                         print "\nRequired inputs are A) multipath -ll file captured prior to scanning migration target array & B) - <SN_src>_only external <LUNID> search file." >> $history
+                         print "\nMake sure the Source VMAX external LUNID list (${naa_ext_src}) is valid and LUNIDs are visible in \"multipath -ll\" (${multi}) output."         >> $history
+                         print "\n\"-r\" (remove) CoReq dependcies include \"-mn\" options or \"naa_ext_src=\", \"multi=\" parms, as described in $utility comments."             >> $history
+                         print "\nTry rerunning \"${utility}\" with CLI \"-t\" (temporary) option set to capture \"${tmp}_...\" tmp files to help troubleshoot issue."            >> $history
+                         print "\nSee History $history file for details.\n"                                                                                                       >> $history
+                         cat $history
+                         exit $rc
+
+                    fi
+
+                    if [[ -s $sd_off_src && -r $sd_off_src ]];then
+
+                         print "\n     \"-r\" (\"remove\"): Migration Source VMAX <sd> SCSI device \"offline\" syntax captured in ${sd_off_src}" >> $outputs
+
+                    else
+
+                         rc=1
+                         print "\nRC: $rc, couldn't create CLI \"-r\" (remove) Migration Source VMAX <sd> SCSI device \"offline\" syntax.  See $utility docs on how to create." >> $history
+                         print "\nSee History $history file for details.\n"                                                                                                      >> $history
+                         cat $history
+                         exit $rc
+
+                    fi
+
+                    if [[ -s $sd_del_src && -r $sd_del_src ]];then
+
+                         print "\n     \"-r\" (\"remove\"): Migration Source VMAX <sd> SCSI device \"delete\"  syntax captured in ${sd_del_src}" >> $outputs
+
+                    else
+
+                         rc=1
+                         print "\nRC: $rc, couldn't create CLI \"-r\" (\"remove\") Migration Source VMAX <sd> SCSI device \"delete\" syntax.  See $utility docs on how to create." >> $history
+                         print "\nSee History $history file for details.\n"                                                                                                         >> $history
+                         cat $history
+                         exit $rc
+
+                    fi
+
+          fi
+
+     # If CLI "-s" ("scan") set, capture syntax to scan host FC [v]HBAs in $scan_host_fc ("/tmp/scan_host_fc"):
+
+          if [[ $opt_s -eq 1 ]];then
+
+               host_hbas=""
+
+               if [[ -d /sys/class/fc_host ]];then host_hbas=$(ls /sys/class/fc_host);fi
+
+               if [[ $host_hbas = *host[0-9]* ]];then
+
+                    print "\nfor hba in $(echo $host_hbas);do echo \"- - -\" > /sys/class/scsi_host/\${hba}/scan;sleep 3;done\n" > $scan_host_fc
+
+                    print "\n     \"-s\" (\"scan\"): Host $host FC [v]HBA scan syntax created in ${scan_host_fc}" >> $outputs
+
+               fi
+
+               if [[ ! (-s $scan_host_fc && -r $scan_host_fc) ]];then
+
+                    rc=1
+                    print "\nRC: $rc, Couldn't create CLI \"-s\" (scan) RHEL host $host FC [v]HBA scan syntax.  Check "/sys/class/fc_host" to see if [v]HBAs are known to host."    >> $history
+                    print "\n\"hbalist\" utility (repository: http://wwwin-people.cisco.com/bnunn/tools) may be used to audit host $host [v]HBAs (incl. FCIDs if logged into SAN)." >> $history
+                    print "\nSee History $history file for details.\n"                                                                                                              >> $history
+                    cat $history
+                    exit $rc
+
+               fi
+
+          fi
+
+     # "check/append" "Actions/Imports/Outputs" files to Results file:
+
+          # "check/append" Actions file to Results file:
+
+               num_actions=$(wc -l $actions | $awk '{print $1}')
+
+               if [[ $num_actions -gt 2 ]];then
+
+                    dup_nul "$actions" "$results"
+
+               fi
+
+          # "check/append" Imports file to Results file:
+
+               num_imports=$(wc -l $imports | $awk '{print $1}')
+
+               if [[ $num_imports -gt 2 ]];then
+
+                    dup_nul "$imports" "$results"
+
+               fi
+
+          # "check/append" Outputs file to Results file:
+
+               num_outputs=$(wc -l $outputs | $awk '{print $1}')
+
+               if [[ $num_outputs -gt 2 ]];then
+
+                    dup_nul "$outputs" "$results"
+
+               fi
+
+     # "check/append" "Results/Log" files to History file:
+
+          # "check/append" Results file to History file:
+
+               num_results=$(wc -l $results | $awk '{print $1}')
+
+               if [[ $num_results -gt 0 ]];then
+
+                    dup_nul "$results" "$history"
+
+               fi
+
+          # "check/append" Log file (command history) to History file:
+
+               num_log=$(wc -l $log | $awk '{print $1}')
+
+               if [[ $num_log -gt 3 ]];then
+
+                    dup_nul "$log" "$history"
+
+               fi
+
+     # "create/append" exit message to History file:
+
+          msg_exit="${utility_uc} audit complete ($(date '+%Y-%m-%d_%H.%M.%S_%Z')).  Details in History file $history"
+
+          print "\n${msg_exit}\n" >> $history
+
+     # "check/display" Results file & issue exit message:
+
+          if [[ $num_results -gt 0 ]];then
+
+               cat $results
+
+          fi
+
+          print "\n${msg_exit}\n"
+
+     # "preserve|remove" temporary ("$tmp": "/tmp/mettmp_...") work files:     {"-t" ("$opt_t"): 0: remove, 1: preserve}
+
+          if [[ $opt_t -eq 0 ]];then $sudo rm -rf ${tmp}_*;fi
+
+}
+
+# Begin Main Program
+
+script=$0                                                                                                      # {Capture script name}
+
+fields=$*                                                                                                      # {Capture script fields}
+
+cmd_line="$script $fields"                                                                                     # {Capture command line}
+
+adt_env                                                                                                        # {Initialize environment}
+
+adt_cli "$fields"                                                                                              # {Parse command line options & parms}
+
+adt_val                                                                                                        # {Validate command line options & parms}
+
+adt_cmn                                                                                                        # {Process command line options & parms}
+
+exit $rc                                                                                                       # {Exit main program}
+
+# End Main Program
