@@ -1,0 +1,452 @@
+#!/bin/ksh
+
+######################################### HBALIST Unix Host Bus Adapter Audit Script #######################################
+#                                                                                                                          #
+#           Name:  hbalist                    {Release = 006, Modified: 06/21/10, Created: 10/22/07, Author = Bill Nunn}   #
+#                                                                                                                          #
+#         Syntax:  ./hbalist [-chstw]                                                                                      #
+#                              :::::                                                                                       #
+#                              :::::-("-w": "wwpn_only" mode: $1-$6 (common), $7-$n (variable), "header/msgs" excluded)    #
+#                              ::::--("-t": "timestamp" (yyyy-mm-dd_hh:mm:ss) suffix added to "hbalist" output files)      #
+#                              :::---("-s": "scratch" /tmp/hbatmp* temporary files are not removed)                        #
+#                              ::----("-h": "header" if "-ch" is specified, "-h" provides common "$1-$6" header & msgs)    #
+#                              :-----("-c": "common_only" mode: "$1-$6 same across platforms, centralized data collection) #
+#                                                                                                                          #
+#         Output:  /tmp/hba_${host}[_yyyy-mm-dd_hh:mm:ss].txt             {Host HBA data}                                  #
+#                  /tmp/hba_${host}_stderr[_yyyy-mm-dd_hh:mm:ss].txt"     {Commands run, STDERR messages (if any)}         #
+#                  /tmp/hbatmp_<temporary_file_name>                      {specify "-s" to save temporary files}           #
+#                                                                                                                          #
+#     Repository:  Repository: https://github.com/bluenunn/Toolchest/                                                      #
+#                                                                                                                          #
+#       Comments:  hbalist supports HBA discovery on HP-UX, Linux (CEL4/5 & ESX) & Solaris for SNIA compliant HBAs.        #
+#                  Option "-c" ("common_only", fields $1-$6) supercedes "-w" ("wwpn_only", fields $1-$n, variable).        #
+#                  hbalist default (no options) or "-ch" outputs additional "header/message" data.                         #
+#                                                                                                                          #
+#     Sample "-ch" hbalist output (formatted, fields $1-$6 common, variable fields ($7-$n) not displayed):                 #
+#                                                                                                                          #
+#              HBA_WWPN        OS          Hostname          IP_address      HBA_PN    Dev|Inst                            #
+#          ----------------   -----   ------------------   ---------------   -------   --------                            #
+#          210000e08b8ab424   CEL4    mylanta              171.70.150.203    QLA2312   qla0                                #
+#          210000e08b8102dc   CEL5    cna-prod-db1         171.70.156.85     ISP2312   qla0                                #
+#          50014380029f327c   ESX     mmx-nprd-vif1-1      72.163.49.48      ISP2432   qla0                                #
+#          50060b000011b950   HP-UX   energy               171.70.157.102    A6795A    td0                                 #
+#          2100001b32943dae   SunOS   sjc5nbu1             171.71.166.159    QLE2562   0                                   #
+#          210000e08b06897b   SunOS   memoria              171.70.148.84     QLA2200   0                                   #
+#                                                                                                                          #
+#     Sample "-w" hbalist output (unformatted, fields $1-$6 common, fields $7-$n variable):                                #
+#                                                                                                                          #
+#          210000e08b8ab424 CEL4 mylanta 171.70.150.203 QLA2312 qla0 Firmware: 3.03.19 Driver: 7.07.04b6                   #
+#          210000e08b8102dc CEL5 cna-prod-db1 171.70.156.85 ISP2312 qla0 Firmware_3.03.15 Driver_8.01.00b5-rh2             #
+#          50014380029f327c ESX mmx-nprd-vif1-1 72.163.49.48 ISP2432 qla0 Firmware_4.04.09 Driver_8.02.01-k1-vmw43         #
+#          50060b000011b950 HP-UX energy 171.70.157.102 A6795A td0 2gbit Online 0x670900 0/0/4/0/0                         #
+#          2100001b32943dae SunOS sjc5nbu1 171.71.166.159 QLE2562 0 4Gb offline qlc /dev/cfg/c2 PCIE2 <hba_hw_path>        #
+#          210000e08b06897b SunOS memoria 171.70.148.84 QLA2200 0 1gbit Online 0x6d0400 pci@8,700000/SUNW,qlc@1            #
+#                                                                                                                          #
+#     Sample Variable length ($1-$n) HBA field defintions per Unix platform:                                               #
+#                                                                                                                          #
+#     HP-UX:                                                                                                               #
+#              HBA_WWPN      OS   Hostname   IP_Address   HBA_PN Dev  Speed Status HBA_FCID HBA_Slot                       #
+#          ---------------- ----- -------- -------------- ------ ---- ----- ------ -------- ---------                      #
+#          50060b000011b950 HP-UX  energy  171.70.157.102 A6795A td0  2gbit Online 0x670900 0/0/4/0/0                      #
+#                                                                                                                          #
+#     Linux (CEL4 / CEL5 (<5.3) / ESX):                                                                                    #
+#                                                                                                                          #
+#              HBA_WWPN      OS    Hostname    IP_address   HBA_PN  Dev  HBA_Firmware     HBA_Driver                       #
+#          ---------------- ---- ------------ ------------- ------- ---- ------------ --------------------                 #
+#          210000e08b8102dc CEL5 cna-prod-db1 171.70.156.85 ISP2312 qla0 FW:3.03.15   DVR:8.01.00b5-rh2                    #
+#                                                                                                                          #
+#           (CEL5 (>= 5.3)):                                                                                               #
+#                                                                                                                          #
+#              HBA_WWPN      OS    Hostname     IP_address   HBA_PN   Dev  HBA_Firmware    HBA_Driver    Speed    FCID     #
+#          ---------------- ---- ------------- ------------- ------- ----- ------------ ---------------- ------ --------   #
+#          2100001b32102493 CEL5 lnxdb-prd-120 171.70.136.33 QLE2460 host0 FW:v4.04.05  DVR:<driver_ver> 2_Gbit 0xd70000   #     
+#                                                                                                                          #
+#     SunOS "qlc" (native Solaris Leadville driver):                                                                       #
+#                                                                                                                          #
+#              HBA_WWPN      OS   Hostname   IP_Address   HBA_PN  Inst Speed Status  QLC   Device    Slot   HBA_HW_Path    #
+#          ---------------- ----- -------- -------------- ------- ---- ----- ------- --- ----------- ----- -------------   #
+#          2100001b32943dae SunOS sjc5nbu1 171.71.166.159 QLE2562  0    4Gb  offline qlc /dev/cfg/c2 PCIE2 <hba_hw_path>   #
+#                                                                                                                          #
+#     SunOS (HBA vendor supplied driver):                                                                                  #
+#                                                                                                                          #
+#              HBA_WWPN      OS   Hostname  IP_Address   HBA_PN  Inst Speed Status HBA_FCID       HBA_HW_Path              #
+#          ---------------- ----- -------  ------------- ------- ---- ----- ------ -------- -----------------------        #
+#          210000e08b06897b SunOS memoria  171.70.148.84 QLA2200  0   1gbit Online 0x6d0400 pci@8,700000/SUNW,qlc@1        #
+#                                                                                                                          #
+############################################################################################################################
+
+script=$0                                                                                # capture script name
+
+fields=$*                                                                                # capture hbalist parameters
+
+host=$(uname -n)                                                                         # capture hostname
+
+tmp="/tmp/hbatmp"                                                                        # set hbalist temp files prefix
+
+if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                  # set "awk" versus "nawk"
+
+id=$(id|$awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')         # determine user id
+
+if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                    # determine if "sudo" is needed
+
+os_type=$(uname)                                                                         # set host OS type
+
+# Determine specific OS (e.g. os_type "Linux" = "CEL4|CEL5|ESX3|ESX4...")
+
+if [[ $os_type = "Linux" ]];then
+     os=$($awk '/^version:/{ver=substr($2,1,index($2,".")-1)
+                  if ($2~/esx/) {gsub(/esx-/,"",ver);print "ESX"ver}
+                  else {print "CEL"ver}}'                      /etc/system-profile)
+     os_ver=$($awk '/^version/{gsub(/esx-/,"",$NF);print $NF}' /etc/system-profile)
+else
+     os=$os_type
+     os_ver=$(uname -a | $awk '{print $3}')
+fi
+
+date=$(date '+%m-%d-%y')                                                                 # set date
+
+if nslookup $host 2>&1 | egrep "Non-existent host" > /dev/null;then
+     ip="ip_unknown"                                                                     # host IP address not found
+else
+     ip=$(nslookup $host | $awk '/Address/{print $NF}' | tail -1)                        # determine host IP address
+fi
+
+time=$(date '+%H:%M:%S')                                                                 # set time
+
+if [[ -d /usr/symcli/bin ]];then symcli="/usr/symcli/bin";else symcli="";fi              # "check/set" SYMCLI directory
+
+$sudo rm -rf /tmp/hba_${host}*.txt                                                       # remove previous output file
+
+$sudo rm -rf ${tmp}*                                                                     # remove previous temporary files
+
+# Initialize temporary work files
+
+touch ${tmp}_fields               2>/dev/null
+touch ${tmp}_options              2>/dev/null
+touch ${tmp}_stderr               2>/dev/null
+touch ${tmp}_inq                  2>/dev/null
+touch ${tmp}_inq_cmp              2>/dev/null
+touch ${tmp}_inq_wpns             2>/dev/null
+touch ${tmp}_inq_status           2>/dev/null
+touch ${tmp}_h1                   2>/dev/null
+touch ${tmp}_h2                   2>/dev/null
+touch ${tmp}_fcms                 2>/dev/null
+touch ${tmp}_fcms_wpns            2>/dev/null
+touch ${tmp}_fcms_slots           2>/dev/null
+touch ${tmp}_lspci                2>/dev/null
+touch ${tmp}_hbas                 2>/dev/null
+touch ${tmp}_hostn                2>/dev/null
+touch ${tmp}_inst                 2>/dev/null
+touch ${tmp}_inst_cmp             2>/dev/null
+touch ${tmp}_drivers              2>/dev/null
+touch ${tmp}_qla                  2>/dev/null
+touch ${tmp}_qlc_wwpn_inst        2>/dev/null
+touch ${tmp}_qlc_wwpn_ctl         2>/dev/null
+touch ${tmp}_qlc_inst_hw          2>/dev/null
+touch ${tmp}_qlc_hw_pn_slot       2>/dev/null
+touch ${tmp}_qlc_lines            2>/dev/null
+touch ${tmp}_qlc_inst_wwpn_ctl    2>/dev/null
+touch ${tmp}_qlc_hw_wwpn_inst_ctl 2>/dev/null
+
+for field in $(echo $fields); do echo $field; done >> ${tmp}_fields                      # parse command line fields
+
+egrep "^-" ${tmp}_fields >> ${tmp}_options                                               # capture "-h"/"-t" options
+
+if egrep "t" ${tmp}_options > /dev/null;then
+     ts="_$(date '+%Y-%m-%d_%H:%M:%S')"                                                  # if "-t", set $ts (timestamp)
+else
+     ts=""
+fi
+
+# Define output and STDERR files
+
+output="/tmp/hba_${host}${ts}.txt"
+stderr="/tmp/hba_${host}_stderr${ts}.txt"
+
+# Initialize output and STDERR files
+
+touch $output
+touch $stderr
+
+if   [[ -d $symcli ]]; then
+     export PATH=$PATH:/usr/symcli/bin                                                   # export SYMCLI path
+     symcli_ver=$($sudo symcli | $awk '/SYMCLI/{print substr($0,match($0,"V[0-9]"))}')   # determine SYMCLI version
+else 
+     symcli_ver="not_installed"
+     echo "Warning: Solutions Enabler (/usr/symcli/bin) is not present on $(uname -n | tr '[a-z]' '[A-Z]')" >> $stderr
+     echo "Warning: \"hbalist\" will not be able to collect HBA data returned by \"syminq hba\"." |\
+     $awk '{print "\n"$0}'                                                                                  >> $stderr
+fi
+
+# Create Import Header ("/tmp/freetmp_header1.txt")
+
+echo  "Hostname: $host"             | $awk '{print "\n"$0}' >> $output
+echo  "IP Address: $ip"                                     >> $output
+echo  "OS Type: $os"                                        >> $output
+echo  "OS Version: $os_ver"                                 >> $output
+echo  "Date: $date $time"                                   >> $output
+echo  "SYMCLI Version: $symcli_ver"                         >> $output
+
+case $os_type in
+
+     "HP-UX") if [[ -d $symcli ]];then
+                   echo "Command: $sudo syminq hba" | $awk '{print "\n"$0}'                                 >> $stderr
+                   $sudo syminq hba 2>>$stderr |\
+                   $awk '/Model               :/{pn=toupper($NF)}
+                         /Port WWN            :/{wwpn=$NF}
+                         /Port name           :/{dev=substr($NF,6)}
+                         /Supported speed     :/{speed=$NF}
+                         /Port state          :/{state=$NF;print wwpn,os,host,ip,pn,dev,speed,state}
+                        ' os=$os host=$host ip=$ip | sort -u                                                >> ${tmp}_inq
+              fi
+
+              hba_devs=$(ls /dev | egrep "fcd[0-9]|td[0-9]" | tr "\n" "\|" | $awk '{print substr($0,1,length($0)-1)}')
+
+              echo "Command: $sudo /opt/fcms/bin/fcmsutil $hba_devs" | $awk '{print "\n"$0}'                >> $stderr
+
+              for hba in $(ls /dev | egrep "fcd[0-9]|td[0-9]" 2>/dev/null | $awk '{print "/dev/"$1}');do
+                        $sudo /opt/fcms/bin/fcmsutil $hba |\
+                        $awk             '/Local N_Port_id/{fcid=$NF}
+                              /N_Port Port World Wide Name/{wwpn=substr($NF,3)}
+                                            /Hardware Path/{hw=$NF;print wwpn,fcid,hw}'
+              done | sort -u                                                                                >> ${tmp}_fcms
+
+              lines=$(wc -l ${tmp}_inq  ${tmp}_fcms | awk '/_/{print $1}' | sort -u | wc -l)
+
+              if [[ -s ${tmp}_inq && -s ${tmp}_fcms && $lines -eq 1 ]];then
+
+                   echo ""                                                                                  >> $output
+                   paste ${tmp}_inq ${tmp}_fcms |\
+                   $awk '{print $1,$2,$3,$4,$5,$6,$7,$8,$10,$11}'                                           >> $output
+
+              else
+
+                   if [[ -s ${tmp}_inq ]];then
+                        echo ""                                                                             >> $output
+                        cat ${tmp}_inq                                                                      >> $output
+                   fi
+                   if [[ -s ${tmp}_fcms ]];then
+                        echo ""                                                                             >> $output
+                        cat ${tmp}_fcms                                                                     >> $output
+                   fi
+
+              fi;;
+
+     "Linux") qla_dir=$(echo /proc/scsi/qla*)
+
+              if [[ -d $qla_dir ]];then
+                   echo ""                                                                                  >> $stderr
+                   echo "Command: awk for HBA data from $qla_dir QLA (0|1|2|3...) files."                   >> $stderr
+                   $awk '/Firmware version/{gsub(/,/,"",$3);firmware=$3}
+                           /Driver version/{driver=$NF}
+                              /^HBA:|^ISP:/{gsub(/,/,"",$2);pn=toupper($2)}
+                             /adapter-port/{dev=substr($1,6,index($1,"adapter")-7)
+                                            wwpn=substr($1,index($1,"=")+1,16)
+                                            print wwpn,os,host,ip,pn,dev,"FW:"firmware,"DVR:"driver}
+                        ' os=$os host=$host ip=$ip /proc/scsi/qla*/[0-9]*                   >> ${tmp}_qla  2>>$stderr
+              fi
+
+              if [[ -s ${tmp}_qla ]];then
+                   echo ""                                                                                  >> $output
+                   cat ${tmp}_qla                                                                           >> $output
+
+              elif [[ -d /sys/class/fc_host ]];then
+
+                   hba_dir="/sys/class/fc_host"
+
+                   echo ""                                                                                  >> $stderr
+                   echo "Command: awk for HBA data from $hba_dir (host0|1|2|3...) files."                   >> $stderr
+
+                   ls -l /sys/class/fc_host | $awk '$NF~/host/{print $NF}'                                  >> ${tmp}_hbas
+
+                   for hba in $(cat ${tmp}_hbas);do
+
+                          fcid=$($awk '/0x/{print $1}'           ${hba_dir}/${hba}/port_id)
+                          wwpn=$($awk '/0x/{print substr($1,3)}' ${hba_dir}/${hba}/port_name)
+                         speed=$($awk '{print $1"_"$2}'          ${hba_dir}/${hba}/speed)
+                        hba_pn=$($awk '{print $1}'               ${hba_dir}/${hba}/symbolic_name)
+                        hba_fw=$($awk '{print $2}'               ${hba_dir}/${hba}/symbolic_name)
+                        hba_dr=$($awk '{print $3}'               ${hba_dir}/${hba}/symbolic_name)
+
+                        echo "$wwpn $os $host $ip $hba_pn $hba $hba_fw $hba_dr $speed $fcid"                >> ${tmp}_hostn
+
+                        done
+
+                   if [[ -s ${tmp}_hostn ]];then
+                        echo ""                                                                             >> $output
+                        cat ${tmp}_hostn                                                                    >> $output
+                   fi
+
+              else
+
+                   echo "" | tee -a                                                                         >> $output
+                   echo "HBA files (0|1...) not found on $os $host" | tee -a                                >> $output
+              fi;;
+
+     "SunOS") # Determine if Solaris host is using "qlc" (native Solaris "Leadville" HBA driver) or HBA vendor driver.
+
+              egrep -i '"lpf|"fca|"jni|"qla|"qlc' /etc/path_to_inst 2>/dev/null |\
+              $awk '{gsub(/"/,"",$NF);print $NF}' | sort -u                                   >> ${tmp}_drivers
+
+              egrep "^qlc" ${tmp}_drivers > /dev/null 2>&1
+
+              if [[ $? -eq 0 && $(wc -l ${tmp}_drivers | $awk '{print $1}') -eq 1 ]];then qlc="qlc";else qlc="";fi 
+
+              # If $qlc="qlc", capture HBA data for native Solaris "Leadville" driver:
+
+              if [[ $qlc = "qlc" ]];then
+
+                   messages=$(egrep "WWPN" /var/adm/mess* 2>/dev/null | egrep "qlc" | $awk -F: '{print $1}' | head -1)
+
+                   if [[ -n $messages ]];then
+                        echo "\nCommand: awk for \"qlc\" (native Solaris Leadville driver) HBAs in $messages" >> $stderr
+                        $awk '/WWPN/{if ($0~/qlc/) {print substr($(NF-2),6),substr($(NF-3),5,length($(NF-3))-5)}}
+                             ' $messages | sort -u                                            >> ${tmp}_qlc_wwpn_inst
+                   fi
+
+                   echo "\nCommand: $sudo fcinfo hba-port"                                    >> $stderr
+                   $sudo fcinfo hba-port |\
+                   $awk   '/HBA Port WWN:/{wwpn=$NF}
+                         /OS Device Name:/{ctl=$NF}
+                                  /State:/{state=$NF}
+                       /Supported Speeds:/{speed=$NF;print wwpn,ctl,speed,state}' | sort -u   >> ${tmp}_qlc_wwpn_ctl
+
+                   echo "\nCommand: $sudo fcinfo hba-port" >> $stderr
+                   egrep -i '"qlc' /etc/path_to_inst|sed -e 's/\"//g' |\
+                   $awk '{print $2,$1,$3}' | sort -u                                          >> ${tmp}_qlc_inst_hw
+
+                   echo "\nCommand: $sudo /usr/platform/$(uname -m)/sbin/prtdiag | egrep qlc" >> $stderr
+                   $sudo /usr/platform/$(uname -m)/sbin/prtdiag | egrep qlc |\
+                   $awk '/^PCIE/{slot=$1;pn=toupper($NF)}
+                          /pci@/{hw=$1;print hw,pn,slot}' | sort -u                           >> ${tmp}_qlc_hw_pn_slot
+
+                   # Analyze "qlc" files:
+
+                   wc -l ${tmp}_qlc_wwpn_inst ${tmp}_qlc_wwpn_ctl ${tmp}_qlc_inst_hw ${tmp}_qlc_hw_pn_slot |\
+                   $awk '/hbatmp_qlc/{print $1}'                                              >> ${tmp}_qlc_lines
+
+                   lines=$(sort -u ${tmp}_qlc_lines | wc -l)                                 
+
+                   if [[ $lines -eq 1 ]];then                        # if "lines/qlc file" are equal, merge qlc files
+
+                        paste ${tmp}_qlc_wwpn_inst ${tmp}_qlc_wwpn_ctl |\
+                        $awk '{print $2,$3,$4,$5,$6}' | sort -u                               >> ${tmp}_qlc_inst_wwpn_ctl
+
+                        paste ${tmp}_qlc_inst_wwpn_ctl ${tmp}_qlc_inst_hw |\
+                        $awk '{print $7,$2,$8,$1,$3,$4,$5}' | sort -u                         >> ${tmp}_qlc_hw_wwpn_inst_ctl
+
+                        paste ${tmp}_qlc_hw_wwpn_inst_ctl ${tmp}_qlc_hw_pn_slot |\
+                        $awk 'BEGIN {print ""}
+                                    {print $2,os,host,ip,$9,$4,$6,$7,$3,$5,$10,$8}' os=$os host=$host ip=$ip >> ${output}
+
+                   else                                              # if "lines/qlc file" differ, "display only" qlc files
+
+                        for file in ${tmp}_qlc_wwpn_inst ${tmp}_qlc_wwpn_ctl ${tmp}_qlc_inst_hw ${tmp}_qlc_hw_pn_slot;do
+
+                             if [[ -s $file ]];then echo "";cat $file;fi                      >> $output
+
+                        done
+
+                   fi
+
+              # If $qlc="", capture data for "non-qlc" HBAs
+
+              else
+
+                   if [[ -d $symcli ]];then
+                        echo "\nCommand: $sudo syminq hba" >> $stderr
+                        $sudo syminq hba 2>>$stderr |\
+                        $awk  '/Port WWN/{wpn=$4}
+                              /Port name/{hw=substr($4,10)}
+                              /Port FCID/{fcid=$4}
+                             /Port speed/{speed=$4}
+                             /Port state/{printf("%s %s %s %s %s %s 0x%-6x %s\n",hw,wpn,os,host,ip,speed,fcid,$4)}
+                              ' os=$os host=$host ip=$ip | sed 's/:devctl//g' | sort -u >> ${tmp}_inq
+                   fi
+
+                   $awk '{print $1}' ${tmp}_inq >> ${tmp}_inq_cmp
+
+                   egrep -i '"lpf|"fca|"jni|"qla' /etc/path_to_inst 2>/dev/null |\
+                   sed -e 's/\"\///'g -e 's/\"//g' | $awk '{print $1,$2,toupper($3)}' >> ${tmp}_inst
+
+                   $awk '{print $1}' ${tmp}_inst >> ${tmp}_inst_cmp
+
+                   cmp ${tmp}_inq_cmp ${tmp}_inst_cmp > /dev/null
+
+                   compare=$?
+
+                   if [[ $compare -eq 0 && -s ${tmp}_inq && -s ${tmp}_inst ]];then
+
+                        paste ${tmp}_inq ${tmp}_inst |\
+                        $awk 'BEGIN {print ""}
+                                    {print $2,$3,$4,$5,$11,$10,$6,$8,$7,$1}' >> $output
+
+                   else
+
+                        if [[ -s ${tmp}_inq ]]; then cat ${tmp}_inq; echo ""; fi >> $output
+
+                        if [[ -s ${tmp}_inst ]]; then
+                             echo "\"/etc/path_to_inst\" HBA major node entries:\n"
+                             cat ${tmp}_inst
+                        fi >> $output
+
+                        egrep "fcaw|jni" ${tmp}_inst > /dev/null 2>&1;jni_inst=$?
+                        egrep "^20[0-9a-f]*e069|^20[0-9a-f]*0173" ${tmp}_inq > /dev/null;jni_inq=$?
+
+                        if [[ $jni_inst -eq 0  && $jni_inq -ne 0 ]]; then
+                             echo "\nJNI HBA entries were detected in \"/etc/path_to_inst\" that were not found by \"syminq hba\"."
+                             echo "\nHost $host HBAs need to be verified manually.\n"
+                        fi >> $output
+
+                        egrep "qla" ${tmp}_inst > /dev/null 2>&1;qla_inst=$?
+                        egrep "^21[0-9a-f]*e08b|^21[0-9a-f]*1b32|^21[0-9a-f]*c0dd" ${tmp}_inq > /dev/null 2>&1;qla_inq=$?
+
+                        if [[ $qla_inst -eq 0  && $qla_inq -ne 0 ]]; then
+                             echo "\nQLA HBA entries were detected in \"/etc/path_to_inst\" that were not found by \"syminq hba\"."
+                             echo "\nHost $host HBAs need to be verified manually.\n"
+                        fi >> $output
+
+                   fi
+
+              fi;;
+
+           *) echo "Host $host OS type ($os_type) is not supported by \"hbalist\"." >> $stderr;;
+
+esac
+
+echo "\"hbalist\" output in $output" | $awk '{print "\n"$0}' >> $output
+
+echo "\"hbalist\" commands run and related STDERR output (if any) in $stderr" | $awk '{print "\n"$0"\n"}' >> $output
+
+if egrep "c" ${tmp}_options > /dev/null;then
+
+     if egrep "h" ${tmp}_options > /dev/null;then common_header="yes";else common_header="no";fi
+
+     if [[ $common_header = "yes" ]];then head -8 $output;fi
+
+     $awk 'BEGIN       {wwpns=0}
+           /^[0-9a-f]+/{if (length($1)==16 && $2~/CEL|ESX|HP|Sun/)
+                           {++wwpns
+                            if (wwpns==1 && ch~/yes/)
+                            {print "    HBA_WWPN        OS            Hostname            IP_address      HBA_PN    Dev|Inst"
+                             print "----------------   -----   ----------------------   ---------------   -------   --------"}
+                            printf("%-19s%-8s%-25s%-18s%-10s%s\n",$1,$2,$3,$4,$5,$6)}}
+
+          ' ch=$common_header $output                                  # "common_only" mode ($1-$6, centralized data collection)
+
+     if [[ $common_header = "yes" ]];then tail -5 $output;fi
+
+elif egrep "w" ${tmp}_options > /dev/null;then
+
+     $awk '/^[0-9a-f]+/{if (length($1)==16 && $2~/CEL|ESX|HP|Sun/)
+                        {print $0}}' $output                           # "wwpn_only" mode ($1-$n, "variable/unformatted")
+
+else cat $output                                                       # display all output (host data, WWPNs, messages...)
+
+fi
+
+egrep "s" ${tmp}_options > /dev/null                                   # check if "-s" (save temporary files) option is set
+
+if [[ $? -ne 0 ]];then
+     $sudo rm -rf ${tmp}*                                              # if "-s" option is not set, remove temporary files
+fi
