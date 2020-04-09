@@ -1,0 +1,233 @@
+#!/usr/bin/bash
+
+######################################## DIRLIST Symmetrix Director Bit Audit Script #######################################
+#                                                                                                                          #
+#           File:  dirlist_r004.ksh.txt       {Modified: 04/08/20, Created: 10/30/07, Author: Bill Nunn}                   #
+#                                                                                                                          #
+#     Repository: https://github.com/bluenunn/Toolchest/                                                                   #
+#                                                                                                                          #
+#         Syntax:  [sudo] ./dirlist -sid nnnn [-itxy]   {"nnnn" = SymmID.  "sudo" not required if logged in as root}       #
+#                                               ::::                                                                       #
+#                                               :::-("-y": save "dirlist" temporary files ("/tmp/dirtmp...)                #
+#                                               :::-("-x": don't run "symcfg discover", insure SYMAPI DB is synced!!!)     #
+#                                               ::--("-t": timestamp suffix added to "dirlist" output files)               #
+#                                               :---("-i": include index of Symmetrix Director Bit definitions)            #
+#                                                                                                                          #
+#                                               {One or more of the above options may be specified}                        #
+#                                                                                                                          #
+#          Setup:  [sudo] scp <user_id>@memoria:/utils/dirlist .;sudo chmod +x dirlist                                     #
+#                                                                                                                          #
+#         Output:  /tmp/dirnnnn[_yyyy-mm-dd_hh:mm:ss].txt          {"nnnn" = Symmetrix ID}                                 #
+#                                                                                                                          #
+#       Comments:  "dirlist" is supported on HP/UX, Linux & Solaris hosts with Solutions Enabler installed.                #
+#                  "dirlist" may be run from a host that sees a Symmetrix as a "Local" or "Remote" array.                  #
+#                  "dirlist" displays a subset of commonly used Symmetrix Director Bits (not all are included).            #
+#                                                                                                                          #
+#                  EMC Support Matrix contains a complete list of all Symmetrix Director Bit definitions.                  #
+#                                                                                                                          #
+############################################################################################################################
+
+# "set/verfiy" parameters:
+
+script=$0                                                                                # capture script name
+
+parms=$*                                                                                 # capture command parms
+
+if [[ $(uname) = SunOS ]];then awk_cmd=nawk;else awk_cmd=awk;fi                          # set "awk" versus "nawk"
+
+base="/tmp/dir"                                                                          # set output file base
+
+tmp="/tmp/dirtmp"                                                                        # set temp files prefix
+
+id=$(id|$awk_cmd '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')     # determine user id
+
+if [[ $id = root ]]; then sudo="";else sudo="sudo"; fi                                   # determine if "sudo" is needed
+
+$sudo rm -rf ${tmp}*                                                                     # remove previous temp files
+
+os_type=$(uname)                                                                         # set host OS type
+
+os_ver=$(uname -a | $awk_cmd '{print $3}')                                               # set host OS version
+
+date=$(date '+%m-%d-%y')                                                                 # set date
+
+time=$(date '+%H:%M:%S')                                                                 # set time
+
+for field in $(echo $parms); do echo $field; done > ${tmp}_fields                        # parse command line fields
+
+egrep -v "^\-sid" ${tmp}_fields | egrep "^\-" > ${tmp}_options                           # capture "-t/-x/-y" options
+
+egrep "t" ${tmp}_options > /dev/null                                                     # check "-t" (timestamp) option
+
+if [[ $? -eq 0 ]]
+then ts="_$(date '+%Y-%m-%d')_${time}"                                                   # if "-t", set $ts (timestamp)
+else ts=""
+fi
+
+sid=$($awk_cmd 'BEGIN {sid_fnd=1}                                                        # capture SID specified in command
+              /^-sid$/{sid_fnd=0}
+           $1~/^[0-9]/{if (sid_fnd == 0) {sid=$1;sid_fnd=1;print sid}}' ${tmp}_fields)
+
+if [[ -z $sid || $sid = [!0-9] ]];then
+     echo "\"${script} ${parms}\" Symmetrix SID is null or is invalid." > ${tmp}_stderr
+     echo "\"${script} ${parms}\" output in \"${tmp}_stderr\"."
+     exit 1                                                                              # exit if SID is null or invalid
+fi
+
+if   [[ -d /usr/symcli/bin ]]; then
+     export PATH=$PATH:/usr/symcli/bin                                                   # export SYMCLI path
+else echo "SYMCLI path \"/usr/symcli/bin\" not found." | $awk_cmd '{print "\n"$0}' > ${tmp}_stderr
+     echo "Install Solutions Enabler or run \"${script}\" from a different host." | $awk_cmd '{print "\n"$0}' >> ${tmp}_stderr
+     echo "\"${script} ${parms}\" output in \"${tmp}_stderr\"."
+     exit 1                                                                              # exit if SYMCLI not found
+fi
+
+# "-x" option (eXpidite = "symcfg discover" not run):
+
+egrep "x" ${tmp}_options > /dev/null                                                     # check "-x" (eXpidite) option
+
+if [[ $? -ne 0 ]]
+then
+     $sudo symcfg discover                                                               # if "-x" then "symcfg discover"
+
+     if [[ $? -ne 0 ]]
+     then
+         echo "\"symcfg discover\" had non-zero return code $?" | $awk_cmd '{print "\n"$0}' >> ${tmp}_stderr
+         echo "\"${script} ${parms}\" output in \"${tmp}_stderr\"."
+         exit 1                                                                          # exit if "symcfg discover" -ne 0
+     fi
+fi
+
+# Collect Data:
+
+$sudo rm -rf ${base}${sid}.txt                                                           # remove previous dirlist output
+
+symcli_ver=$($sudo symcli | $awk_cmd '/SYMCLI/{print substr($0,match($0,"V[0-9]"))}')    # set SYMCLI version
+
+$sudo symcfg -sid $sid list 2>${tmp}_stderr > ${tmp}_cfg                                 # "symcfg -sid nnnn list"
+
+if [[ $? -ne 0 ]]
+then
+    echo "\"symcfg -sid $sid list\" had non-zero return code $?" | $awk_cmd '{print "\n"$0}' >> ${tmp}_stderr
+    echo "\"${script} ${parms}\" output in \"${tmp}_stderr\"."
+    exit 1                                                                               # exit if "symcfg list" -ne 0
+fi
+
+symm_id=$($awk_cmd '$1~/000/{print $1}' ${tmp}_cfg)                                      # capture Symmetrix S/N
+symm_loc=$($awk_cmd '$1~/000/{print $2}' ${tmp}_cfg)                                     # determine "Local/Remote"
+symm_mod=$($awk_cmd '$1~/000/{print $3}' ${tmp}_cfg)                                     # capture Symmetrix model
+symmwin=$($awk_cmd '$1~/000/{print $4}' ${tmp}_cfg)                                      # Symmwin level (symcfg)
+
+# $sudo symconfigure -sid $sid list -v 2>${tmp}_stderr > ${tmp}_cfgr                       # "symconfigure list -v"
+
+# if [[ $? -eq 0 ]]
+# then symmwin=$($awk_cmd '/Configuration Server Version/{print $NF}' ${tmp}_cfgr)         # Symmwin level (symconfigure)
+# else symmwin=$($awk_cmd '$1~/000/{print $4}' ${tmp}_cfg)                                 # Symmwin level (symcfg)
+# fi
+
+$sudo symcfg -sid $sid -sa all list -v 2>${tmp}_stderr > ${tmp}_sas
+
+if [[ $? -ne 0 ]]
+then
+    echo "\"symcfg -sid $sid -sa all list -v\" had non-zero return code $?" | $awk_cmd '{print "\n"$0}' >> ${tmp}_stderr
+    echo "\"${script} ${parms}\" output in \"${tmp}_stderr\"."
+    exit 1                                                                               # exit if "symcfg -sa all" -ne 0
+fi
+
+# Create Header:
+
+echo " Command: $script $parms"                    | $awk_cmd '{print "\n"$0"\n"}'  > ${base}${sid}${ts}.txt
+echo "Hostname: $(hostname)"                                                       >> ${base}${sid}${ts}.txt
+echo " OS Type: $os_type"                                                          >> ${base}${sid}${ts}.txt
+echo " OS Vers: $os_ver"                                                           >> ${base}${sid}${ts}.txt
+echo "    Date: $(date '+%Y-%m-%d_%H.%M.%S_%Z')"                                   >> ${base}${sid}${ts}.txt
+echo "  SYMCLI: $symcli_ver"                                                       >> ${base}${sid}${ts}.txt
+echo "   Model: $symm_mod"                                                         >> ${base}${sid}${ts}.txt
+echo "  SymmID: $symm_id"                                                          >> ${base}${sid}${ts}.txt
+echo " Symmwin: $symmwin"                                                          >> ${base}${sid}${ts}.txt
+echo "Location: $symm_loc"                                                         >> ${base}${sid}${ts}.txt
+echo "${symm_mod}_${sid} Symmetrix Director Bits:" | $awk_cmd '{print "\n"$0"\n"}' >> ${base}${sid}${ts}.txt
+
+# Format Symmetrix Director Bits:
+
+echo "Dir Prt ${sid}_WWPNs CMN DQU ARB UWN PPT EAN SC3 SP2 SS1 VSA ALX" |\
+$awk_cmd '{printf("%3s  %-3s %-16s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s\n",\
+                   $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)}' >> ${base}${sid}${ts}.txt
+
+$awk_cmd           'BEGIN {fsf=1}
+/Director Symbolic Number/{dir=$NF}
+          /Director Port:/{prt=$NF}
+           /WWN Port Name/{wpn=$NF}
+    /Common_Serial_Number/{cmn=substr($NF,1,3)}
+   /Disable_Q_Reset_on_UA/{dqu=substr($NF,1,3)}
+   /Avoid_Reset_Broadcast/{arb=substr($NF,1,3)}
+                  /SCSI_3/{sc3=substr($NF,1,3)}
+   /SPC2_Protocol_Version/{sp2=substr($NF,1,3)}
+           /SCSI_Support1/{ss1=substr($NF,1,3)}
+    /Fibre Specific Flags/{fsf=0}
+   /Volume_Set_Addressing/{vsa=substr($NF,1,3)}
+     /Init_Point_to_Point/{ppt=substr($NF,1,3)}
+              /Unique_WWN/{uwn=substr($NF,1,3)}
+            /Access_Logix/{alx=substr($NF,1,3)}
+          /Auto_Negotiate/{ean=substr($NF,1,3)}
+                       /}/{if (fsf==0)
+                              {if (dir == "") {dir = " - "}
+                               if (prt == "") {prt = " - "}
+                               if (wpn == "") {wpn = " - "}
+                               if (cmn == "") {cmn = " - "}
+                               if (dqu == "") {dqu = " - "}
+                               if (arb == "") {arb = " - "}
+                               if (sc3 == "") {sc3 = " - "}
+                               if (sp2 == "") {sp2 = " - "}
+                               if (ss1 == "") {ss1 = " - "}
+                               if (vsa == "") {vsa = " - "}
+                               if (ppt == "") {ppt = " - "}
+                               if (uwn == "") {uwn = " - "}
+                               if (alx == "") {alx = " - "}
+                               if (ean == "") {ean = " - "}
+                               printf("%3s   %-2s %-16s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s %4s\n",\
+                                       dir,prt,wpn,cmn,dqu,arb,uwn,ppt,ean,sc3,sp2,ss1,vsa,alx)
+                               fsf=1}}
+                      END {print " "}' ${tmp}_sas >> ${base}${sid}${ts}.txt
+
+# "-i" option (Symmetrix Director Bit Index):
+
+egrep "i" ${tmp}_options > /dev/null                         # test for "-i" (Symmetrix Director Bit Index option)
+
+if [[ $? -eq 0 ]]                                            # if "-i", then print Symmetrix Director Bit Index
+then
+     echo "Symmetrix Director Bit Index:"      | $awk_cmd '{print $0"\n"}' >> ${base}${sid}${ts}.txt
+     echo "SCSI Flags:"                        | $awk_cmd '{print $0"\n"}' >> ${base}${sid}${ts}.txt
+     echo "CMN: Common_Serial_Number(C)"                                   >> ${base}${sid}${ts}.txt
+     echo "DQU: Disable_Q_Reset_on_UA(D)"                                  >> ${base}${sid}${ts}.txt
+     echo "ARB: Avoid_Reset_Broadcast(ARB)"                                >> ${base}${sid}${ts}.txt
+     echo "SC3: SCSI_3(SC3)"                                               >> ${base}${sid}${ts}.txt
+     echo "SP2: SPC2_Protocol_Version(SPC2)"                               >> ${base}${sid}${ts}.txt
+     echo "SS1: SCSI_Support1(OS2007)"                                     >> ${base}${sid}${ts}.txt
+     echo "\nFibre Specific Flags:\n"                                      >> ${base}${sid}${ts}.txt
+     echo "UWN: Unique_WWN(UWN)"                                           >> ${base}${sid}${ts}.txt
+     echo "PPT: Init_Point_to_Point(PP)"                                   >> ${base}${sid}${ts}.txt
+     echo "EAN: Auto_Negotiate(EAN)"                                       >> ${base}${sid}${ts}.txt
+     echo "VSA: Volume_Set_Addressing(V)"                                  >> ${base}${sid}${ts}.txt
+     echo "ALX: Access_Logix(ACLX)"            | $awk_cmd '{print $0"\n"}' >> ${base}${sid}${ts}.txt
+fi
+
+# "check/add" STD_ERR:
+
+if [[ -s ${tmp}_stderr ]];
+then
+     echo "STD_ERR:"                           | $awk_cmd '{print $0"\n"}' >> ${base}${sid}${ts}.txt
+     cat ${tmp}_stderr                                                     >> ${base}${sid}${ts}.txt
+fi
+
+# "-y" option (determine if temporary files are to be saved)
+
+egrep "y" ${tmp}_options > /dev/null                         # test for "-y" option (save "${tmp}*" temporary files)
+
+if [[ $? -ne 0 ]];then $sudo rm -rf ${tmp}*;fi               # if not "-y" option, then remove "${tmp}*" temporary files
+
+# Send output to screen:
+
+echo "\"${script} ${parms}\" output in \"${base}${sid}${ts}.txt\"." | $awk_cmd '{print "\n"$0}'
+
+cat ${base}${sid}${ts}.txt
