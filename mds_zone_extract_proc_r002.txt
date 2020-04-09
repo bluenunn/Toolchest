@@ -1,0 +1,434 @@
+
+                                                                     MDS Zone Extract Procedure
+
+File:  mds_zone_extract_proc_r002.txt                {Modified: 09/27/19, Created: 11/01/17, Author: Bill Nunn}
+
+Repository:  Repository: https://github.com/bluenunn/Toolchest/
+
+Overview:
+
+     Following procedure may be used to extract zones related to a set of comma delimited search arguments (ex: Zone Names, PWWNs, Device Alias's, ...)
+     from zoning data collected using MDS "show zoneset [active]" command.  In the example below, zones related to 12-node Oracle ASM RAC consisting of
+     12 x physical RHEL servers (scarecrow-201...212) will be extracted based on host name.  In this environment, each host has 8 x vHBAs.  Each vHBA
+     should have a corresponding single initiator zone use to access the Prod C3 block storage arrays.  In total, there should be 96 zones (12 hosts x
+     8 vHBAs = 96 single initiator zones, 2 SAN fabrics with 4 zones each per fabric per host).  In this example, only 95 zones were found using zone
+     extraction based on host name.  Appendix outlines how to determine which host has the missing zone (scarecrow-203) and how the 8 x vHBAs for that
+     zone may be used to cross verify that the zone is missing and identify the vHBA that should have a zone added for it.  The active zoneset data
+     (MDS "show zoneset active" command) used as input for this procedure comes from host MDS switches "oz101-h1-san-dw1/dw2" in SAN fabrics 1 & 2. 
+     Use of regular expressions in "$srch_args" is supported including awk "basic/extended" meta chars, char classes and Posix Bracket Expressions.
+
+Identify Search Arguments:
+
+     Find zones related to 12-node Oracle ASM RAC scarecrow-201...212 
+
+Collect Zoneset Data:
+
+     # Define Variables:
+
+          zn_chk=/tmp/oz101_zn_act_chk                                                        # {Tailor to match zone data  input  file}
+          zn_fnd=/tmp/oz101_zn_act_fnd                                                        # {Tailor to match zone found output file}
+
+          sw_fab1=oz101-h1-san-dw1                                                            # {Tailor to match Fabric_1 MDS data source switch}
+          sw_fab2=oz101-h1-san-dw2                                                            # {Tailor to match Fabric_2 MDS data source switch}
+
+          srch_args="scarecrow-20[1-9],scarecrow-21[012]"                                     # {Tailor with one or more CSV delimited search arguments}
+
+                                                                                              # (Search arguments are case insensitive, embedded ":"s are optional for WWPN search arguments}
+                                                                                              # {Zonesets are assumed to be fully distributed across all MDS switches within each fabric}
+                                                                                              # {Regex support: awk "basic/extended" meta chars, char classes, Posix Bracket Expressions}
+                                                                                              # {Ex: srch_args="scarecrow[12]*-20[[:digit:]][[:alpha:]]*,scarecrow[12]*-21[0-2][[:alpha:]]*"}
+                                                                                              # {Awk's use of "lower/upper" case char classes ("[a-z], [A-Z]") is unpredictable,  see Appendix}
+
+     # Collect Data:                                                                          # {Run data collection commands host with trusted MDS relationship (ex: admin@svl-storage-1)}
+
+          echo ""                                > $zn_chk                                    # {Initialize MDS data input file}
+          echo "MDS: $sw_fab1"                  >> $zn_chk                                    # {Identify Fabric_1 data source}
+          ssh -q $sw_fab1 "show zoneset active" >> $zn_chk                                    # {Collect  Fabric_1 zoneset data from a trusted ID/server (ex: admin@svl-storage-1)}
+
+          echo "MDS: $sw_fab2"                  >> $zn_chk                                    # {Identify Fabric_2 data source}
+          ssh -q $sw_fab2 "show zoneset active" >> $zn_chk                                    # {Collect  Fabric_2 zoneset data from a trusted ID/server (ex: admin@svl-storage-1)}
+
+     # Extract Zones:                                                                         # {Run from Unix style host (ex: RHEL)}
+
+          awk=awk;if [[ $(uname) = SunOS ]];then awk=nawk;fi                                  # {set "awk" (non-Solaris) versus "nawk" (Solaris, legacy)}
+
+          $awk 'BEGIN {chk_zn=0;cnt_zn=0;fnd_zn=0;num_zn=0;mat_zn=0}
+                      {
+                       if ($0~/^[ ]*$/ || $0~/^MDS:/ || $0~/^zoneset/) {
+                                                                        if (fnd_zn==1) {
+                                                                                        ++chk_zn
+                                                                                        for (s=1; s<=num_srch; s++) {for (z=1; z<=num_zn; z++) {if (ary_zn[z] ~ ary_srch[s]) {mat_zn=1}}}
+                                                                                        if (mat_zn == 1) {for (z=1; z<=num_zn; z++) {print ary_zn[z]}}
+                                                                                        fnd_zn=0
+                                                                                       }
+                                                                       }
+                       if ($0~/^[ ]*$/)    {print ""}
+                       if ($0~/^MDS:/)     {printf("\n%s\n\n",$0)}
+                       if ($0~/^zoneset/)  {znset=$0}
+                       if ($0~/zone name/) {
+                                            ++cnt_zn
+                                            if (cnt_zn==1) {srch_args_lc=tolower(srch_args);num_srch=split(srch_args_lc,ary_srch,",")}
+                                            fnd_zn=1;num_zn=0;mat_zn=0
+                                           }
+                       if (fnd_zn==1) {++num_zn;gsub(/:/,"",$0);rec_zn=tolower($0);ary_zn[num_zn]=rec_zn}
+                      }
+                  END {
+                       if (cnt_zn>chk_zn) {
+                                           for (s=1; s<=num_srch; s++) {for (z=1; z<=num_zn; z++) {if (ary_zn[z] ~ ary_srch[s]) {mat_zn=1}}}
+                                           if (mat_zn == 1) {for (z=1; z<=num_zn; z++) {print ary_zn[z]}}
+                                          }
+                       print ""
+                      }
+               ' srch_args="$srch_args" $zn_chk |\
+          $awk ' NR==1 {rec_prev=$0;print rec_prev}; NR>1 {prt=1;if (rec_prev~/^[ ]*$/ && $0~/^[ ]*$/) {prt=0};if (prt==1) {print $0};rec_prev=$0}' > $zn_fnd
+
+Appendix:
+
+     Sample Search Arguments ("$srch_args"):
+
+          oz101-san-mgr1:/tmp $ echo "$srch_args"
+          scarecrow-20[1-9],scarecrow-21[012]
+
+     Sample Input File ("$zn_chk"):
+
+          oz101-san-mgr1:/tmp $ view $zn_chk     # {File: /tmp/oz101_zn_act_chk}
+
+          MDS: oz101-h1-san-dw1
+          zoneset name ZS-oz101-HALL1-LINUX-VSAN2250 vsan 2250
+            zone name Z-NONSODC-LINUX-VSAN2250-oz101NBU04_HBA0 vsan 2250
+              pwwn 21:00:00:1b:32:9e:8c:09 [oz101NBU04-HBA0]
+              pwwn 50:00:09:72:08:60:dd:a1 [VMAX6199-FA09GB]
+          <...>
+            zone name Z-LINUX-VSAN3130-scarecrow-201_HBA1 vsan 3130
+            * fcid 0x8003b1 [pwwn 20:02:4c:00:00:00:00:df] [scarecrow-201_HBA1]
+              pwwn 50:00:09:73:f0:14:8d:80 [VMAX1315-FA01GA]
+              pwwn 50:00:09:73:f0:12:e1:80 [VMAX1208-FA01GA]
+            * fcid 0x7c0f20 [pwwn 50:00:09:73:50:11:11:dc] [VMAX01092-FA8D28]
+            * fcid 0x7b03a0 [pwwn 50:00:09:73:58:14:9c:18] [VMAX01319-FA1D24]
+            * fcid 0x7b0060 [pwwn 50:00:09:73:58:14:ac:18] [VMAX01323-FA1D24]
+            * fcid 0x690040 [pwwn 50:00:09:73:58:15:04:18] [VMAX01345-FA1D24]
+          <...>
+          MDS: oz101-h1-san-dw2
+          zoneset name ZS-oz101-HALL1-LINUX-VSAN2251 vsan 2251
+            zone name Z-NONSODC-LINUX-VSAN2251-oz101NBU04_HBA1 vsan 2251
+              pwwn 21:00:00:1b:32:9d:34:e3 [oz101NBU04-HBA1]
+              pwwn 50:00:09:72:08:60:dd:9d [VMAX6199-FA08GB]
+          <...>
+            zone name Z-UCS-LINUX-scarecrow-212_HBA6 vsan 3131
+            * fcid 0x80024c [pwwn 20:02:4c:00:00:00:00:4a] [scarecrow-212_HBA6]
+              pwwn 50:00:09:73:f0:14:8d:45 [VMAX1315-FA02FB]
+              pwwn 50:00:09:73:f0:12:e1:45 [VMAX1208-FA02FB]
+            * fcid 0x7c0e20 [pwwn 50:00:09:73:50:11:11:5f] [VMAX01092-FA6D31]
+            * fcid 0x7b0120 [pwwn 50:00:09:73:58:14:9c:59] [VMAX01319-FA2D25]
+            * fcid 0x7b0620 [pwwn 50:00:09:73:58:14:ac:59] [VMAX01323-FA2D25]
+            * fcid 0x6800c0 [pwwn 50:00:09:73:58:15:04:9e] [VMAX01345-FA3D30]
+          <...>
+
+     Sample Output File ("$zn_fnd"):
+
+          oz101-san-mgr1:/tmp $ view $zn_fnd     # {File: /tmp/oz101_zn_act_fnd}
+
+          MDS: oz101-h1-san-dw1
+          <...>
+            zone name Z-LINUX-VSAN3130-scarecrow-201_HBA1 vsan 3130
+            * fcid 0x8003b1 [pwwn 20:02:4c:00:00:00:00:df] [scarecrow-201_HBA1]
+              pwwn 50:00:09:73:f0:14:8d:80 [VMAX1315-FA01GA]
+              pwwn 50:00:09:73:f0:12:e1:80 [VMAX1208-FA01GA]
+            * fcid 0x7c0f20 [pwwn 50:00:09:73:50:11:11:dc] [VMAX01092-FA8D28]
+            * fcid 0x7b03a0 [pwwn 50:00:09:73:58:14:9c:18] [VMAX01319-FA1D24]
+            * fcid 0x7b0060 [pwwn 50:00:09:73:58:14:ac:18] [VMAX01323-FA1D24]
+            * fcid 0x690040 [pwwn 50:00:09:73:58:15:04:18] [VMAX01345-FA1D24]
+          <...>
+          MDS: oz101-h1-san-dw2
+          <...>
+            zone name Z-UCS-LINUX-scarecrow-212_HBA6 vsan 3131
+            * fcid 0x80024c [pwwn 20:02:4c:00:00:00:00:4a] [scarecrow-212_HBA6]
+              pwwn 50:00:09:73:f0:14:8d:45 [VMAX1315-FA02FB]
+              pwwn 50:00:09:73:f0:12:e1:45 [VMAX1208-FA02FB]
+            * fcid 0x7c0e20 [pwwn 50:00:09:73:50:11:11:5f] [VMAX01092-FA6D31]
+            * fcid 0x7b0120 [pwwn 50:00:09:73:58:14:9c:59] [VMAX01319-FA2D25]
+            * fcid 0x7b0620 [pwwn 50:00:09:73:58:14:ac:59] [VMAX01323-FA2D25]
+            * fcid 0x6800c0 [pwwn 50:00:09:73:58:15:04:9e] [VMAX01345-FA3D30]
+          <...>
+
+     "$srch_args" Support:
+
+          Description:
+
+                Procedure converts "$srch_args" & "$zn_chk" input records to lower case before checking for a match.  "$zn_fnd" output records are all in lower case.
+                MDS "show zoneset [active]" command includes ":"s (colons) in PWWN (Port World Wide Name, ex: "pwwn 20:0b:23:00:00:00:00:af").  Procedure removes ":"s
+                from both "$srch_args" and "$zn_chk" input records before checking for a match.  Supports awk meta characters, char classes & Posix Bracket Expressions.
+                Awk support for traditional "lower/upper" case char classes ("[a-z], [A-Z]") is unpredictable", see "Regexp Ranges and Locales: A Long Sad Story" below.
+
+          Sample "$srch_args":
+
+               Support for "lower/UPPER" case letters and ":"s (colons):
+
+                    Sample match for string "... pwwn 20:0b:23:00:00:00:00:af ...":
+
+                         srch_args="200b2300000000af"                 # {"$srch_args": lower case with no ":"s}
+
+                         srch_args="200B2300000000AF"                 # {"$srch_args": UPPER case with no ":"s}
+
+                         srch_args="20:0b:23:00:00:00:00:af"          # {"$srch_args": lower case with ":"s}
+
+                         srch_args="20:0B:23:00:00:00:00:AF"          # {"$srch_args": UPPER case with ":"s}
+
+               Support for awk meta characters, character clases, PBEs (Posix Bracket Expressions):
+
+                    Sample match for hosts "scarecrow[12]-nnn[[:alpha:]]*" ("nnn": 200-212):          {ex: scarecrow-201, scarecrow1-107, scarecrow2-212c}
+
+                         srch_args="scarecrow[12]*-20[[:digit:]][[:alpha:]]*,scarecrow[12]*-21[0-2][[:alpha:]]*"
+                                             :::::   |||||||||||                              :::::||||||||||||
+                                             :::::   |||||||||||                              :::::||||||||||||-----(PBE "[:alpha:]" in surrounding "[]"s matches "*" zero or more "[a-z]/[A-Z]")
+                                             :::::   |||||||||||                              :::::-----------------(Char class "[0-2]" for range "0, 1, 2")
+                                             :::::   |||||||||||----------------------------------------------------(PBE "[:digit:]" in surrounding "[]"s forms char class "[0-9]")
+                                             :::::------------------------------------------------------------------("*" zero or more occurrences of char class "[1-2]")
+
+          <awk meta characters>
+
+               Basic:
+
+                        . - matches any single character
+
+                        * - matches 0 or more occurences of preceeding single character.
+
+                    [...] - character class, "^" as 1st = reverse match.
+
+                        ^ - match beginning of line
+
+                        $ - match end of line
+
+               Extended:
+
+                        ? - matches 0 or 1 occurences of preceeding regular expression.
+
+                        + - matches 1 or more occurences of preceeding regular expression.
+
+                        | - alternation, preceeding or following regex can be matched.
+
+                       () - group regular expressions.
+
+                    {n,m} - matches range of preceeding single character (inc regex).
+                            {n} matches exactly "n" occurences
+                            {n,} matches at least "n" occurences
+                            {n,m} matches any number of occurences "n-m" for POSIX egrep/awk
+
+          <Posix Bracket Expressions>
+
+               Links:
+
+                    Regular-Expressions.info: http://www.regular-expressions.info/posixbrackets.html
+
+                    Regexp Ranges and Locales: A Long Sad Story: http://www.gnu.org/software/gawk/manual/gawk.html#Ranges-and-Locales
+
+                    Regex Tutorial - Posix Bracket Expressions:  http://allregex.com/tutorials/posix-bracket-expressions
+
+                         Support:
+
+                              - Posix bracket expressions are supported in Perl, PHP, Ruby, Unix (including awk)
+
+                              - Posix bracket expressions are not supported in Java, Javascript, .NET, Python
+
+               Sample use of Posix Bracket Expressions ("[:upper:]" & "[:digit:]") to form character classes ([...]):
+
+                    awk '$1~/^[[:upper:][:digit:]]/'{<code>}'       {ex: $1 starts with an upper case letter ("A-Z") or a digit ("0-9")}
+                              :                  :
+                              :------------------:------------------(enclose in a single "[...]" bracket set to form a single char class (matches "A-Z0-9")
+
+                    awk '$1~/^[[:upper:]][[:digit:]]/'{<code>}'     {ex: $1 starts with an upper case letter ("A-Z") followed by a digit ("0-9")}
+                              :         :|         |
+                              :---------:|---------|----------------(enclose in seperate "[...][...]" bracket sets to form two distinct char classes: "A-Z" & "0-9")
+
+                    For awk, use Posix bracket expressions in place of traditional ASCII letter ranges to form "lower/UPPER" case character classes.
+                    Not doing so may cause unexpected filtering results on hosts using non-ASCII locales (ex: $LANG = Unicode locale "en_US.UTF-8").
+                    If a subset of lower or upper case letters needs to be matched in awk, they may be explicitly specified (e.g. don't use "-" in
+                    char class).  Ex:  awk '$1~/[aBcDeF]/{...}' would correctly match lower case "[ace]" and upper case "[BDF]" in "$1" of record).
+                    Use of "[a-z]" in awk might also match UPPER case range "A-Z" & use of "[A-Z]" in awk might also match lower case range "a-z".
+
+               Posix Bracket Expression Table:
+
+                      Posix                            Description                              ASCII             Unicode        Shorthand      Java
+                    ---------   --------------------------------------------------------   ---------------   -----------------   ---------   ----------
+                    [:alnum:]    Alphanumeric characters                                   [a-zA-Z0-9]       [\p{L&}\p{Nd}]                  \p{Alnum}
+
+                    [:alpha:]    Alphabetic characters                                     [a-zA-Z]          \p{L&}                          \p{Alpha}
+
+                    [:ascii:]    ASCII characters                                          [\x00-\x7F]       \p{InBasicLatin}                \p{ASCII}
+
+                    [:blank:]    Space and tab                                             [ \t]             [\p{Zs}\t]           \h         \p{Blank}
+
+                    [:cntrl:]    Control characters                                        [\x00-\x1F\x7F]   \p{Cc}                          \p{Cntrl}
+
+                    [:digit:]    Digits                                                    [0-9]             \p{Nd}               \d         \p{Digit}
+
+                    [:graph:]    Visible characters                                        [\x21-\x7E]       [^\p{Z}\p{C}]                   \p{Graph}
+
+                    [:lower:]    Lowercase letters                                         [a-z]             \p{Ll}                          \p{Lower}
+
+                    [:print:]    Visible characters and spaces                             [\x20-\x7E]       \P{C}                           \p{Print}
+                                 (i.e. anything except control characters, etc.)
+
+                    [:punct:]    Punctuation and symbols.                                  [!"#$%&'()*+,     [\p{P}\p{S}]                    \p{Punct}
+                                                                                           \-./:;<=>?@,
+                                                                                           [\\\]^_`{|}~]
+
+                    [:space:]    All whitespace characters                                 [ \t\r\n\v\f]     [\p{Z}\t\r\n\v\f]    \s         \p{Space}
+                                 (including line breaks)
+
+                    [:upper:]    Uppercase letters                                         [A-Z]             \p{Lu}                          \p{Upper}
+
+                    [:word:]     Word characters                                           [A-Za-z0-9_]     [\p{L}\p{N}\p{Pc}]    \w
+                                 (letters, numbers and underscores)
+
+                    [:xdigit:]   Hexadecimal digits                                        [A-Fa-f0-9]      [A-Fa-f0-9]                      \p{XDigit}
+
+     Troubleshoot missing zone for oz101 Prod C3 12-node Oracle ASM Environment:
+
+          12 x Physical RHEL hosts:  scarecrow-201...212            {8 x vHBAs/host, each vHBA should have a corresponding single initiator zone}
+
+          Expected # of Prod C3 single initiator zones: 96          {12 hosts x 8 vHBAs/host = 96 x single initiator zones}
+
+          Check zones in "$zn_fnd" created using "host name" based "$srch_args":
+
+               oz101-san-mgr1:/tmp $ srch_args="scarecrow-20[1-9],scarecrow-21[012]"
+
+               <Run "zone extract" procedure using "$srch_args" set to match host names, output in "$zn_fnd">
+
+               oz101-san-mgr1:/tmp $ echo $zn_fnd
+               /tmp/oz101_zn_act_fnd
+
+               oz101-san-mgr1:/tmp $ egrep "zone name" /tmp/oz101_zn_act_fnd | wc -l
+               95                                                                                                            <== {95 zones founds (should be 96 = 12 hosts x 8 vHBAs/host)}
+
+               oz101-san-mgr1:/tmp $ host=scarecrow-201;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-202;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-203;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               7                                                                                                             <=== {only 7 zones found for scarecrow-203 based on host name}
+               oz101-san-mgr1:/tmp $ host=scarecrow-204;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-205;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-206;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-207;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-208;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-209;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-210;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-211;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+               oz101-san-mgr1:/tmp $ host=scarecrow-212;egrep "zone name" /tmp/oz101_zn_act_fnd | egrep -i $host | wc -l
+               8
+
+          Cross verify scarecrow-203 zoning using host vHBAs:
+
+               Determine scarecrow-203 vHBAs:
+
+                    scarecrow-203:/users/bnunn $ ./hbalist          # {"hbalist" repository: http://wwwin-people.cisco.com/bnunn/tools}
+
+                    Hostname: scarecrow-203
+                    IP Address: 173.37.179.134
+                    OS Type: CEL5
+                    OS Version: 5.50-5Server_Q316-reboot_Q316-nonreboot
+                    Date: 11-11-17 19:45:31
+                    SYMCLI Version: V8.0.1.0 (Edit Level: 1953)
+
+                    20024c00000000be CEL5 scarecrow-203 173.37.179.134 fnic host1 v1.5.0.1 over 10_Gbit 0x8003a7
+                    20024c00000000ee CEL5 scarecrow-203 173.37.179.134 fnic host2 v1.5.0.1 over 10_Gbit 0x800408
+                    20024c00000000de CEL5 scarecrow-203 173.37.179.134 fnic host3 v1.5.0.1 over 10_Gbit 0x8003a8
+                    20024c00000000fe CEL5 scarecrow-203 173.37.179.134 fnic host4 v1.5.0.1 over 10_Gbit 0x800407
+                    20024c000000009e CEL5 scarecrow-203 173.37.179.134 fnic host5 v1.5.0.1 over 10_Gbit 0x8003a5
+                    20024c000000008e CEL5 scarecrow-203 173.37.179.134 fnic host6 v1.5.0.1 over 10_Gbit 0x800406
+                    20024c00000000ae CEL5 scarecrow-203 173.37.179.134 fnic host7 v1.5.0.1 over 10_Gbit 0x8003a6
+                    20024c00000000ce CEL5 scarecrow-203 173.37.179.134 fnic host8 v1.5.0.1 over 10_Gbit 0x800405
+                    ::::::::::::::::                                   ::::                             ::::::::
+                    ::::::::::::::::                                   ::::                             ::::::::---(FCIDs - Fibre Channel IDs: ddaapp (Domain Area Port), MDS "show fcns da")
+                    ::::::::::::::::                                   ::::
+                    ::::::::::::::::                                   ::::---(fnic: Cisco CNA (Converged Network Adapter) Fibre Channel Network Interface Card driver)
+                    ::::::::::::::::
+                    ::::::::::::::::---(host scarecrow-203 Fibre Channel vHBA (virtual Host Bus Adapter) WWPNs (World Wide Port Numbers, used for MDS single initiator zoning)
+
+                    "hbalist" output in /tmp/hba_scarecrow-203.txt
+
+                    "hbalist" commands run and related STDERR output (if any) in /tmp/hba_scarecrow-203_stderr.txt
+
+               Rerun zone extract procedure to check for "scarecrow-203" based on hosts 8 x vHBAs (expectation is that there should be 8 zones (1 zone/vHBA):
+
+                    oz101-san-mgr1:/tmp $ srch_args="20024c00000000be,20024c00000000ee,20024c00000000de,20024c00000000fe,20024c000000009e,20024c000000008e,20024c00000000ae,20024c00000000ce"
+
+                   *Note: srch_args="20024c00000000[89abcdef]e" would yield the same result as the above longer CSV delimited $srch_args (all 8 comma seperated vHBAs).
+
+                    <Run "zone extract" procedure using "$srch_args" set to match 8 x vHBAs of host scarecrow-203, output in "$zn_fnd">
+
+                    oz101-san-mgr1:/tmp $ echo $zn_fnd
+                    /tmp/oz101_zn_act_fnd
+
+                    oz101-san-mgr1:/tmp $ egrep "zone name" /tmp/oz101_zn_act_fnd | wc -l
+                    7                                                                                                          <=== {only 7 zones found for scarecrow-203 based on host vHBAs}
+
+                    oz101-san-mgr1:/tmp $ egrep "zone name" /tmp/oz101_zn_act_fnd                                              <=== {zone missing for vHBA "scarecrow-203_hba7"}
+                      zone name z-linux-vsan3130-scarecrow-203_hba1 vsan 3130
+                      zone name z-linux-vsan3130-scarecrow-203_hba5 vsan 3130
+                      zone name z-linux-vsan3130-scarecrow-203_hba3 vsan 3130
+                      zone name z-ucs-linux-scarecrow-203_hba8 vsan 3131
+                      zone name z-ucs-linux-scarecrow-203_hba4 vsan 3131
+                      zone name z-ucs-linux-scarecrow-203_hba2 vsan 3131
+                      zone name z-ucs-linux-scarecrow-203_hba6 vsan 3131
+
+               Determine scarecrow-203 vHBA that does currently does not have a single initiator zone defined for it.
+
+                    Create unique sorted list of scarecrow-203 vHBAs from "hbalist" output:
+
+                         scarecrow-203:/tmp $ awk '$1~/^20024c00000000/{print $1}' /tmp/hba_scarecrow-203.txt | sort -u > cmp_hbalist
+
+                    Create unique sorted list of scarecrow-203 vHBAs present in "$zn_fnd" based on scarecrow-203 vHBAs:
+
+                         awk '$0~/20024c00000000/{print substr($0,index($0,"20024c00000000"),16)}' $zn_fnd | sort -u > cmp_zn_fnd
+
+                    Check to see if an scarecrow-203 vHBA is missing from either file:
+
+                         oz101-san-mgr1:/tmp $ wc -l cmp_hbalist cmp_zn_fnd
+                           8 cmp_hbalist
+                           8 cmp_zn_fnd
+                          16 total
+
+                         oz101-san-mgr1:/tmp $ cmp cmp_hbalist cmp_zn_fnd
+                         oz101-san-mgr1:/tmp $                                                     # {no scarecrow-203 vHBAs are missing from either file}
+
+                    Identify the scarecrow-203 zone that contains multiple initiators (vHBAs):
+
+                         oz101-san-mgr1:/tmp $ view oz101_zn_act_fnd
+
+                         MDS: oz101-h1-san-dw1
+
+                           zone name z-linux-vsan3130-scarecrow-203_hba1 vsan 3130                 # {sample single initiator zone (compliant per zoning standard)}
+                           * fcid 0x8003a5 [pwwn 20024c000000009e] [scarecrow-203_hba1]            # {sample single initiator (vHBA) present in zone}
+                             pwwn 50000973f0148d80 [vmax1315-fa01ga]
+                             pwwn 50000973f012e180 [vmax1208-fa01ga]
+                           * fcid 0x7c07c0 [pwwn 50000973501110d8] [vmax01092-fa4d24]
+                           * fcid 0x7b03a0 [pwwn 5000097358149c18] [vmax01319-fa1d24]
+                           * fcid 0x7b0060 [pwwn 500009735814ac18] [vmax01323-fa1d24]
+                           * fcid 0x690040 [pwwn 5000097358150418] [vmax01345-fa1d24]
+
+                           zone name z-linux-vsan3130-scarecrow-203_hba5 vsan 3130                 # {sample multi initiator zone (non-compliant per zoning standard)}
+                           * fcid 0x8003a7 [pwwn 20024c00000000be] [scarecrow-203_hba5]            # {1st initiator ("hba5") matches between zone name & device-alias}
+                             pwwn 50000973f0148d40 [vmax1315-fa01fa]
+                             pwwn 50000973f012e140 [vmax1208-fa01fa]
+                           * fcid 0x7c0a00 [pwwn 50000973501111d8] [vmax01092-fa8d24]
+                           * fcid 0x7b0320 [pwwn 5000097358149c5a] [vmax01319-fa2d26]
+                           * fcid 0x7b0420 [pwwn 500009735814ac5a] [vmax01323-fa2d26]
+                           * fcid 0x8003a8 [pwwn 20024c00000000de] [scarecrow-203_hba7]            # {2nd initiator ("hba7") doesn't match zone name (should have its own zone)}
+                             pwwn 50000973f0148d81 [vmax1315-fa01gb]
+                             pwwn 50000973f012e181 [vmax1208-fa01gb]
+                           * fcid 0x7c0d00 [pwwn 5000097350111158] [vmax01092-fa6d24]
+                           * fcid 0x7b0300 [pwwn 5000097358149c1a] [vmax01319-fa1d26]
+                           * fcid 0x7b0020 [pwwn 500009735814ac1a] [vmax01323-fa1d26]
+                           * fcid 0x6900e0 [pwwn 5000097358150498] [vmax01345-fa3d24]
+                           * fcid 0x690180 [pwwn 50000973581504da] [vmax01345-fa4d26]
+                         <...>
