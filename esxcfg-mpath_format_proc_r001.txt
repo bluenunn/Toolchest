@@ -1,0 +1,116 @@
+
+File: esxcfg-mpath_format_proc_r001.txt                {Modified: 11/19/19, Created: 11/19/19, Author: Bill Nunn}
+
+Repository: https://github.com/bluenunn/Toolchest/
+
+<Define "esxcfg-mpath -L" input ($raw) & output ($fmt[1|2]) file variables>
+
+     # "copy/paste" on Unix style host where "esxcfg-mpath -L" raw input file is staged.
+
+     raw=esxcfg-mpath-L_rtp1-vif088-03          # {Tailor as needed:  "/usr/sbin/esxcfg-mpath -L" raw input file}
+
+     fmt1=${raw}_unclaimed                      # {Tailor if desired: "(unclaimed)/(no device)" Path List}
+
+     fmt2=${raw}_claimed                        # {Tailor if desired: "claimed" NAA_LUNID_ext Path Summary Table}
+
+<Generate $fmt1: "(unclaimed)/(no device)" list (<#_paths> with no associated "naa.6..." LUNIDs>
+
+     # "copy/paste" on Unix style host where "esxcfg-mpath -L" raw input file is staged.
+
+     awk '$0~"(no device)" && $0~"(unclaimed)"' $raw | column -t > $fmt1
+
+<Generate $fmt2: "claimed" NAA_LUNID_ext Path Summary Table>
+
+     # "copy/paste" on Unix style host where "esxcfg-mpath -L" raw input file is staged.
+
+     awk '$3~/^naa/ {naa=$3;state=$2;print naa,state}' $raw | column -t | sort -k1,2 |\
+     awk 'BEGIN {
+                 fnd_naa=0
+                 naa="<naa>"
+                 naa_prev="<naa_prev>"
+                 paths_ttl=0
+                 paths_act=0
+                 paths_dead=0
+                 alert_null=""
+                 alert_msg1="  <=== {\"Path Alert: <#_Total> -ne (<#_Active> + <#_Dead>)}\""
+                 print "NAA_LUNID_ext Ttl Act Dead"
+                }
+                {
+                 naa=substr($1,5)
+                 state=substr($2,7)
+                 if (fnd_naa==1 && naa!=naa_prev) {
+                                                   alert=alert_null
+                                                   if (paths_ttl!=paths_act+paths_dead) {alert=alert_msg1}
+                                                   print naa_prev,paths_ttl,paths_act,paths_dead""alert
+                                                   paths_ttl=0;paths_act=0;paths_dead=0
+                                                  }
+                 ++paths_ttl
+                 if (state=="active") {++paths_act}
+                 if (state=="dead")   {++paths_dead}
+                 naa_prev=naa
+                 fnd_naa=1
+                }
+            END {if (fnd_naa==1) {
+                                  alert=alert_null
+                                  if (paths_ttl!=paths_act+paths_dead) {alert=alert_msg1}
+                                  print naa,paths_ttl,paths_act,paths_dead""alert}
+                                 }' | column -t |\
+     awk 'BEGIN {print "\n                                  <----Paths--->"};{print $0};END {print ""}' > $fmt2
+
+<Appendix:>
+
+     Sample Input ($raw):            {"/usr/sbin/esxcfg-mpath -L" raw input file}
+
+          rtp1-vm-san-mgr1:/users/bnunn/audit/netapp $ view $raw
+          <...>
+          vmhba3:C0:T7:L28 state:active naa.600a0980383043674f5d4b3630386a79 vmhba3 0 7 28 NMP active san fc.50000025b5000ab4:50a00025b5000e3d fc.204900a098b5d33c:202800a098b5d33c
+          vmhba3:C0:T7:L29 state:active naa.600a0980383043674f5d4b363038694b vmhba3 0 7 29 NMP active san fc.50000025b5000ab4:50a00025b5000e3d fc.204900a098b5d33c:202800a098b5d33c
+          vmhba5:C0:T3:L20 state:dead naa.600a098038304365445d4b3630386974 vmhba5 0 3 20 NMP dead san fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba5:C0:T3:L21 state:dead naa.600a0980383043674f5d4b3630386a66 vmhba5 0 3 21 NMP dead san fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba1:C2:T0:L0 state:active naa.618e728372e1b39023da55060d61fe0e vmhba1 2 0 0 NMP active san sas.518e728372e1b390 sas.60da55060d61fe0e
+          vmhba5:C0:T3:L22 state:dead naa.600a0980383043674f5d4b3630386844 vmhba5 0 3 22 NMP dead san fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba5:C0:T3:L23 state:dead naa.600a0980383043674f5d4b3630386845 vmhba5 0 3 23 NMP dead san fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba5:C0:T3:L24 state:dead naa.600a0980383043674f5d4b363038696b vmhba5 0 3 24 NMP dead san fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba2:C0:T6:L60 state:active naa.600a09803830436678244b3050557646 vmhba2 0 6 60 NMP active san fc.50000025b5000ab4:50a00025b5000e3c fc.204900a098b5d33c:202600a098b5d33c
+          vmhba5:C0:T3:L25 state:dead (no device) vmhba5 0 3 25 (unclaimed) dead unknown fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          vmhba2:C0:T6:L61 state:active naa.600a09803830436678244b3050557647 vmhba2 0 6 61 NMP active san fc.50000025b5000ab4:50a00025b5000e3c fc.204900a098b5d33c:202600a098b5d33c
+          vmhba5:C0:T3:L26 state:dead (no device) vmhba5 0 3 26 (unclaimed) dead unknown fc.50000025b5000ab4:50b00025b50010b5 fc.ffffffffffffffff:202000a098b5d33c
+          <...>
+
+     Sample Output ($fmt1):          {"(unclaimed)/(no device)" Path List}
+
+          rtp1-vm-san-mgr1:/users/bnunn/audit/netapp $ wc -l $fmt1     # {<#_unclaimed> ESXi (no device) paths}
+          30 esxcfg-mpath-L_rtp1-vif088-03_unclaimed
+
+          rtp1-vm-san-mgr1:/users/bnunn/audit/netapp $ view $fmt1
+          vmhba5:C0:T4:L66  state:dead  (no  device)  vmhba5  0  4  66  (unclaimed)  dead  unknown  fc.50000025b5000ab4:50b00025b50010b5  fc.ffffffffffffffff:202d00a098b5d33c
+          vmhba4:C0:T3:L62  state:dead  (no  device)  vmhba4  0  3  62  (unclaimed)  dead  unknown  fc.50000025b5000ab4:50b00025b50010b6  fc.ffffffffffffffff:201f00a098b5d33c
+          <...>
+          vmhba5:C0:T4:L1   state:dead  (no  device)  vmhba5  0  4  1   (unclaimed)  dead  unknown  fc.50000025b5000ab4:50b00025b50010b5  fc.ffffffffffffffff:202d00a098b5d33c
+          vmhba5:C0:T4:L4   state:dead  (no  device)  vmhba5  0  4  4   (unclaimed)  dead  unknown  fc.50000025b5000ab4:50b00025b50010b5  fc.ffffffffffffffff:202d00a098b5d33c
+
+     Sample Output ($fmt2):          {"claimed" NAA_LUNID_ext Path Summary Table}
+
+          rtp1-vm-san-mgr1:/users/bnunn/audit/netapp $ awk '$0~/^6/ {lun_type=substr($1,1,7);print lun_type}' $fmt2 | sort | uniq -c
+               82 600a098
+               :1 618e728
+               :: :::::::
+               ::-:::::::---("82 600a098": 82 x cDOT SAN LUNs  known to ESXi host, "6<OUI>... = "600a098...")
+               ::-:::::::---(" 1 618e728":  1 x UCS Local Disk known to ESXi host, "6<OUI>... = "618e728...")
+                  :::::::
+                  :::::::---("6<OUI>": IEEE Standards Authority Product Services: https://standards.ieee.org/products-services/regauth/oui/index.html)
+                  :::::::---("6<OUI>": IEEE OUI (Organizationally Unique Identifier) Repository: http://standards.ieee.org/develop/regauth/oui/oui.txt)
+
+          rtp1-vm-san-mgr1:/users/bnunn/audit/netapp $ view $fmt2
+
+                                            <----Paths--->
+          NAA_LUNID_ext                     Ttl  Act  Dead
+          600a098038304333705d4b492f457a38  4    2    2
+          600a09803830433779244b492f45792f  4    2    2
+          600a09803830433779244b492f45795a  3    2    1
+          600a098038304365445d4b363038682d  3    2    1
+          <...>
+          600a098038304469712b4c364e2d676c  4    2    2
+          600a098038304469712b4c364e2d6779  3    2    1
+          600a098038304469713f4c585a426447  4    2    2
+          618e728372e1b39023da55060d61fe0e  1    1    0
