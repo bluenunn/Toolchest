@@ -1,0 +1,586 @@
+#!/bin/bash
+	
+####################################################################################### (VMAX_AUDIT Utility) #############################################################################
+#                                                                                                                                                                                        #
+#           File:  vmax_audit_r006.txt                               {Modified: 11/22/19, Created: 09/21/16, Author: Bill Nunn}                                                          #
+#                                                                                                                                                                                        #
+#     Repository: https://github.com/bluenunn/Toolchest/                                                                                                                                 #
+#                                                                                                                                                                                        #
+#       Overview:  VMAX_AUDIT utility provides a one line summary audit for each "Local/Remote" [PV]MAX visible to Unix host using EMC Solutions Enabler (recommended version >= V9.x).  #
+#                  Utility is designed to run on Unix style hosts & assumes EMC [PV]MAX Solutions Enabler management software is installed in "/usr/symcli/bin".  In addition to array   #
+#                  config/capacity data, VMAX_AUDIT uses "symaudit -sid $sid list -action_code vtoc" to determine the "AdtLogInit" date in the first record of VMAX AUDIT LOG showing    #
+#                  when the log's VTOC (Volume Table Of Contents) was written (e.g. log was initialized and VMAX is ready for use by the customer).  In Cisco GIS, "AdtLogInit" date     #
+#                  is typically within a month or so of the array's lease begin date.  By comparing where VMAX is within its lifecycle relative to some of the other metrics returned    #
+#                  by VMAX_AUDIT (ex: Used (%), Comp Ratio, Subscription (%)s, ...), customer can get a sense of how efficiently "usable/effective" VMAX capacity is being utilized.     #
+#                                                                                                                                                                                        #
+#                  VMAX Comp Ratio (compression) only applies to newer [PV]MAX AFA (All Flash Array).  Current optimization ratio used to market "effective" [PV]MAX AFA capacity is     #
+#                  [34].0:1 (e.g. 100 TiBs of formatted "usable" SRP (Storage Resource Pool) capacity should be able to provide [34]00 TiBs of "effective" capacity for use by client    #
+#                  (provisioning, snapshots, ...).  For the older VMAX3 hybrid platforms, optimization factor is 1.0:1 meaning "usable/effective" capacity are the same.  Current        #
+#                  VMAX AFA capacity optimization is based on compression.  To implement VMAX AFA compression, an array wide target variable (range 1000-3000 matching 1.0:1-3.0:1) is   #
+#                  set by EMC at the factory.  Additionally, for a given TDEV (e.g. LUN) to be compressed it must belong to an SG (Storage Group) that has compression enabled.  Each    #
+#                  TDEV may belong to multiple SGs but only one of the SGs it belongs to may have compression enabled.  Use VMAX AFA COMPLIST utility in the tools repositories listed   #
+#                  above to audit "per TDEV" compression status as well as SG groups related to each TDEV.  Deduplication is a future targeted VMAX AFA roadmap optimization feature.    #
+#                                                                                                                                                                                        #
+#                  If VMAX_AUDIT returns a non-zero RC (Return Code) it may be indicative of a problem encountered rendering the audit invalid or it may be that a Solutions Enabler     #
+#                  command was run for a feature that is not enabled on the array (ex: "symrdf -sid $sn ..." run on a VMAX not enabled for SRDF (Symmetrix Remote Data Facility) in      #
+#                  which case tha audit results should be valid.  For runs with non-zero RCs, reference History output file described below to determine if audit results are valid.     #
+#                  If VMAX_AUDIT is used to audit all VMAXs visible to host in a single run (e.g. "sid=<SID>" parm is not specified), utility uses "symcfg list -v" command to create    #
+#                  a comprehensive VMAX audit list.  "symcfg list -v" by itself ("... -sid <SID>" not specified) first queries host's Solutions Enabler SYMAPI DB to look for visible    #
+#                  VMAXs and then attempts to communicate with the VMAX to query additional array configuration data.  If a VMAX was previously visible to the host but is no longer     #
+#                  present (ex: deinstalled) an array entry may still exist in the SYMAPI DB but the subsequent attempt to communicate with the array will fail with a npn-zero RC.      #
+#                  Phantom SYMAPI DB array entries may be deleted using Solutions Enabler "symcfg -sid <SID> remove" command.  Once the SYMAPI DB only contains valid array entries,     #
+#                  it should be possible to perform a comprehensive VMAX_AUDIT run.  If phantom VMAX entries exist, "symcfg list" minus "-v" works since only SYMAPI DB is queried.      #
+#                                                                                                                                                                                        #
+#         Syntax:  ./vmax_audit [-otx] [sid=<SID>] [suf=<suffix>]                                                                                                                        #
+#                                 :::                                                                                                                                                    #
+#        Options:                 :::---("-x": "expidite"  - Optional, don't run "symcfg discover" to sync up host SYMAPI DB prior to collecting Solutions Enabler data.)                #
+#                                 ::----("-t": "temporary" - Optional, ${tmp}_... ("/tmp/vmax_audit_tmp_...") work files are not removed at the end of execution.)                       #
+#                                 :-----("-o": "override"  - Optional, override minimum EMC Solutions Enabler base (V8.x) required on audit host.)                                       #
+#                                                                                                                                                                                        #
+#          Parms:   [sid=<SID>]   - Optional, if parm is specified, VMAX_AUDIT only audits <SID> (VMAX System ID of 1 to 12 digits that uniquely identifies array on host).              #
+#                                   If parm is not specified, VMAX_AUDIT will audit all "Local/Remote" VMAXs visible to host.                                                            #
+#                                                                                                                                                                                        #
+#                   [suf=<suffix> - Optional, if parm is specified, VMAX_AUDIT will append suffix ($suf="_<suffix>") to end of "History/Details/Summary" output files.                   #
+#                                   If VMAX_AUDIT needs to exit prematurely (ex: Solutions Enabler not found), "suf=" parm will not be appended to any of the output files.              #
+#                                                                                                                                                                                        #
+#        History:  /tmp/vmax_audit_log_$(hostname)[${suf}]     {VMAX Audit History:  timestamps, data source, commands, RCs, STD_ERR msgs}                                               #
+#                                                                                                                                                                                        #
+#        Details:  /tmp/vmax_audit_det_$(hostname)[${suf}]     {VMAX Audit Details:  multiple lines per VMAX}                                                                            #
+#                                                                                                                                                                                        #
+#        Summary:  /tmp/vmax_audit_sum_$(hostname)[${suf}]     {VMAX Audit Summary:  single line per VMAX}                                                                               #
+#                                                                                                                                                                                        #
+#   Sample Audit Outputs:                                                                                                                                                                #
+#                                                                                                                                                                                        #
+#        History:                                                                                                                                                                        #
+#                                                                                                                                                                                        #
+#             tinman-san-mgr1:/tmp $ view vmax_audit_log_tinman-san-mgr1                                                                                                                 #
+#                                                                                                                                                                                        #
+#             Begin Timestamp: 2017-10-24_14:53:57_CDT                                                                                                                                   #
+#                                                                                                                                                                                        #
+#             Command Line: ./vmax_audit                                                                                                                                                 #
+#                                                                                                                                                                                        #
+#             Data_Source: tinman-san-mgr1     {User_ID: bnunn, OS_type: Linux, OS_ver: RedHat-7.1_Q316-reboot_Q317-nonreboot}                                                           #
+#                                                                                                                                                                                        #
+#             Max_RC: 1                                                                                                                                                                  #
+#                                                                                                                                                                                        #
+#             Audit History:                                                                                                                                                             #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcfg discover                                                                                                                                          #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcli                                                                                                                                                   #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcfg list -v                                                                                                                                           #
+#                                                                                                                                                                                        #
+#             SN: 000192606694                                                                                                                                                           #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symaccess -sid 000192606694 list devinfo                                                                                                                 #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symaccess -sid 000192606694 list logins                                                                                                                  #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcfg -sid 000192606694 list -pool -tb                                                                                                                  #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcfg -sid 000192606694 list -ra all                                                                                                                    #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symcfg -sid 000192606694 list -sa all -v                                                                                                                 #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symdev -sid 000192606694 list -all                                                                                                                       #
+#                                                                                                                                                                                        #
+#                  RC: 0   Cmd: symdisk -sid 000192606694 list                                                                                                                           #
+#                                                                                                                                                                                        #
+#             <-----Repeats for each frame in audit----->                                                                                                                                #
+#                                                                                                                                                                                        #
+#                  VMAX Audit History:  /tmp/vmax_audit_log_tinman-san-mgr1     {timestamps, data source, commands, RCs (max_RC: 1), STD_ERR msgs}                                       #
+#                                                                                                                                                                                        #
+#                  VMAX Audit Details:  /tmp/vmax_audit_det_tinman-san-mgr1     {multiple lines per VMAX}                                                                                #
+#                                                                                                                                                                                        #
+#                  VMAX Audit Summary:  /tmp/vmax_audit_sum_tinman-san-mgr1     {single line per VMAX}                                                                                   #
+#                                                                                                                                                                                        #
+#                  End Timestamp: 2017-10-24_14:56:34_CDT                                                                                                                                #
+#                                                                                                                                                                                        #
+#        Details:                                                                                                                                                                        #
+#                                                                                                                                                                                        #
+#             tinman-san-mgr1:/tmp $ view vmax_audit_det_tinman-san-mgr1                                                                                                                 #
+#                                                                                                                                                                                        #
+#                           Timestamp:  2017-10-24_14:53:57_CDT                                                                                                                          #
+#                         Data_Source:  tinman-san-mgr1                                                                                                                                  #
+#                   Solutions_Enabler:  V8.3.0.22                                                                                                                                        #
+#                                  SN:  000192606694                                                                                                                                     #
+#                               Model:  VMAX20K                                                                                                                                          #
+#                          AdtLogInit:  2014-11-30                                                                                                                                       #
+#                            HyperMax:  5876.286.194                                                                                                                                     #
+#                             Lcl_Rmt:  Local                                                                                                                                            #
+#                           #_Engines:      6                                                                                                                                            #
+#                 #_FE_SA_Ports_total:     48                                                                                                                                            #
+#                 #_FE_SA_Ports_login:     44                                                                                                                                            #
+#                Cache_Mirrored_(TiB):   0.23                                                                                                                                            #
+#                      Pool_Raw_(TiB):  469.6                                                                                                                                            #
+#                   Pool_Usable_(TiB):  345.4                                                                                                                                            #
+#                     Pool_Used_(TiB):  252.8                                                                                                                                            #
+#                       Pool_Used_(%):   73.0                                                                                                                                            #
+#                       Pool_Comp_(%):      -                                                                                                                                            #
+#                 Cap_TDEVs_All_(TiB):  336.9                                                                                                                                            #
+#                 Cap_TDEVs_Lcl_(TiB):  336.4                                                                                                                                            #
+#                 Cap_TDEVs_R1s_(TiB):    0.5                                                                                                                                            #
+#                 Cap_TDEVs_R2s_(TiB):    0.0                                                                                                                                            #
+#                 Cap_VDEVs_All_(TiB):    1.3                                                                                                                                            #
+#             Cap_[TV]DEVs_ACLX_(TiB):    0.0                                                                                                                                            #
+#                                                                                                                                                                                        #
+#             <-----Repeats for each frame in audit----->                                                                                                                                #
+#                                                                                                                                                                                        #
+#        Summary:                                                                                                                                                                        #
+#                                                                                                                                                                                        #
+#             tinman-san-mgr1:/tmp $ view vmax_audit_sum_tinman-san-mgr1                                                                                                                 #
+#                                                                                                                                                                                        #
+#             Timestamp: 2017-10-24_14:53:57_CDT  Data_Source: tinman-san-mgr1  SYMCLI: V8.3.0.22 #_Local_VMAXs: 9  #_Remote_VMAXs: 3  max_RC: 1  {if RC != 0, see History file}         #
+#                                                                                                                                                                                        #
+#                                                                                                                                                            Subscription                #
+#                                                                Cache <-------------Pool-------------> <-------------------TDEVs------------------->  Mask  Mask/  Mask/                #
+#                                                            Eng (Mir)   Raw    Usbl   Used  Used Comp    Cfg    Lcl   Lcl    R1s   R1s    R2s   R2s  (ACLX) Usbl   Used                 #
+#               Serial_#    Model        HyperMax    Lcl/Rmt (#) (TiB)  (TiB)  (TiB)  (TiB)  (%)  Ratio  (TiB)  (TiB)  (%)   (TiB)  (%)   (TiB)  (%)   (TiB)  (%)    (%)   AdtLogInit    #
+#             ------------ --------- --------------  ------- --- ----- ------ ------ ------ ----- ----- ------ ------ ----- ------ ----- ------ ----- ------ -----  -----  ----------    #
+#             000196701483  VMAX200K 5977.952.892    Local    2   0.92  471.3  339.5  211.7  62.0 1.0:1  381.1  234.8  61.6  146.3  38.4    0.0   0.0  275.9  81.3  130.3  2015-10-22    #
+#             <...>                                                                                                                                                                      #
+#             000197800976  VMAX250F 5977.1125.1125  Local    2   1.92  146.0  102.6    1.2   1.0 1.0:1    0.0    0.0   n/a    0.0   n/a    0.0   n/a    0.0   0.0    0.0  2017-05-20    #
+#                                                                                                                                                                                        #
+##########################################################################################################################################################################################
+
+dup_nul () {
+
+# Syntax: dup_nul <src1> [<src2> ... <src#>] <tgt>     # {optionally enclose each parm in double quotes (ex: "src" "tgt")}
+
+# Description: Function deletes hidden control chars & strips out consecutive "zero field" records (ex: null lines) from
+#              one or more source text input files (ex: src1 src2 tgt).  Output is appended to "<tgt>" text output file.
+#              If "<tgt>" is an empty file, it will contain no consecutive "zero field" records when dup_nul is finished.
+#              There is no practical limit to number of source files that dup_nul may process.  dup_nul requires at least
+#              two text files to function (ex: src tgt).  If zero or only one text file is defined, function does nothing.
+#              After execution, global variables "$fcn_num" & "$fcn_str" may be used to query arguments passed to dup_nul.
+
+# Code:
+
+     fcn_num=$#          # {"$fcn_num": # of arguments  passed to function (ex: 3)}
+
+     fcn_str=$*          # {"$fcn_str": argument string passed to function (ex: src1 src2 tgt)}
+
+     if [[ $fcn_num -ge 2 ]];then
+
+          if [[ $tmp = /tmp/[a-z]*tmp ]];then dup_nul_stg=${tmp}_dup_nul_stg;else dup_nul_stg=/tmp/dup_nul_stg;fi
+
+          rm -rf $dup_nul_stg
+
+          touch $dup_nul_stg 2>/dev/null
+
+          num_src=$(($fcn_num-1))
+
+          pos_tgt=$fcn_num
+
+          src_str=$(echo $fcn_str | awk '{for (s=1;s<=num_src;s++) {src_str=src_str" "$s}};END {print src_str}' num_src=$num_src)
+
+          tgt=$(echo $fcn_str | awk '{print $pos_tgt}' pos_tgt=$pos_tgt)
+
+          for src in $src_str;do cat $src;done > $dup_nul_stg
+
+          awk '{gsub(/[[:cntrl:]]+/,"",$0)
+                if (NR==1) {
+                            nf_prev=NF
+                            print $0
+                           }
+                if (NR >1) {
+                            if (!(nf_prev==0 && NF==0)) {print $0}
+                            nf_prev=NF
+                           }
+               }' $dup_nul_stg >> $tgt
+
+          if [[ $opt_t -ne 1 ]];then rm -rf $dup_nul_stg;fi
+
+     fi
+
+}
+
+adt_env () {
+
+# Syntax: adt_env
+
+# Description: "discover/initialize" vmax_audit environment.
+
+# Code:
+
+# Setup environment & capture Local/Remote VMAX SNs visible to host                                            # {Run from storage management host (reqs: Solutions Enabler, recommended >= v8.x)}
+
+     host=$(hostname)                                                                                          # {Capture name of storage array management host (ex: "rcdn9|tinman|rtp1"-san-mgr1)}
+
+     history=/tmp/vmax_audit_log_${host}                                                                       # {VMAX Audit History:  timestamps, data source, commands, RCs, STD_ERR msgs}
+
+     details=/tmp/vmax_audit_det_${host}                                                                       # {VMAX Audit Details:  multiple lines per VMAX}
+
+     summary=/tmp/vmax_audit_sum_${host}                                                                       # {VMAX Audit Summary:  single line per VMAX}
+
+     tmp=/tmp/vmax_audit_tmp                                                                                   # {$tmp staging directory}
+
+     log=${tmp}_log                                                                                            # {staging area for $history file} 
+
+     rcs=${tmp}_rcs                                                                                            # {$rcs defines file with list of uniquely numerically vmax_audit return codes}
+
+     sns=${tmp}_sns_cmn                                                                                        # {$sns defines file with list of VMAX serial numbers to be audited}
+
+     ts=$(date '+%Y-%m-%d_%H:%M:%S_%Z')                                                                        # {Capture audit beginning timestamp (ex: 2016-09-23_13:43:46_PDT)} 
+
+     if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                                   # {Sun: set "nawk" (new awk), non-Sun (ex: RHEL, HP/UX): set "awk".}
+
+     id=$(id | $awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')                        # {Determine user id ("root" versus "non-root").}
+     if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                                     # {Set $sudo based on $id (root: sudo=""; non-root: sudo="sudo").}
+
+     pat_dec="[0-9][0-9]*"                                                                                     # {$pat_dec pattern: >= 1 consecutive digits (decimal)}
+     pat_sa="[[:alpha:]][[:alpha:]]-"                                                                          # {$pat_sa partial: VMAX SA (SCSI Adapter) Frontend Director (ex: "FA-" of "FA-1D")}
+     pat_sn="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"                                                 # {$pat_sn pattern: full 12 digit VMAX serial number (d'000...')}
+     pat_symdev="[0-9ABCDEF][0-9ABCDEF][0-9ABCDEF][0-9ABCDEF][0-9ABCDEF]"                                      # {$pat_symdev pattern: VMAX Symdev (5 hex characters, upper case)}
+
+     $sudo rm -rf $history                                                                                     # {Remove previous VMAX history audit file}
+     $sudo rm -rf $details                                                                                     # {Remove previous VMAX details audit file (multiple lines per array)}
+     $sudo rm -rf $summary                                                                                     # {Remove previous VMAX summary audit file (one line per array)}
+     $sudo rm -rf ${tmp}_*                                                                                     # {Remove any ${tmp} files from previous audit}
+
+     touch $history                2>/dev/null                                                                 # {Initialize VMAX history audit file}
+     touch $details                2>/dev/null                                                                 # {Initialize VMAX details audit file (multiple lines per array)}
+     touch $summary                2>/dev/null                                                                 # {Initialize VMAX summary audit file (one line per array)}
+     touch $log                    2>/dev/null                                                                 # {Initialize VMAX staging area for $history file}
+     touch $rcs                    2>/dev/null                                                                 # {Initialize uniquely numerically sorted return code file}
+     touch $sns                    2>/dev/null                                                                 # {Initialize common (..._cmn) "Local/Remote" VMAX full 12 digit SN (000...) file}
+
+     touch ${tmp}_fields           2>/dev/null                                                                 # {Initialize CLI fields    file (store KSH "$*" system variable transposed)}
+     touch ${tmp}_options          2>/dev/null                                                                 # {Initialize CLI options   file (store "-[a-z]" single letter options)}
+     touch ${tmp}_parms            2>/dev/null                                                                 # {Initialize CLI parms     file (store "<parm>=<value>") parms}
+     touch ${tmp}_parms_fmt        2>/dev/null                                                                 # {Initialize CLI parms_fmt file (store "<parm>=<value>") parms (formatted)}
+
+     touch ${tmp}_cfg-v_cmn        2>/dev/null                                                                 # {Initialize common (..._cmn) VMAX "symcfg list -v" file}
+     touch ${tmp}_cli_cmn          2>/dev/null                                                                 # {Initialize common (..._cmn) Solutions Enabler version file}
+     touch ${tmp}_dis_cmn          2>/dev/null                                                                 # {Initialize common (..._cmn) Solutions Enabler "symcfg discover" file}
+
+     printf "\nBegin Timestamp: $ts\n"     > $history                                                          # {Capture begining timestamp into $history file}
+     printf "\nCommand Line: $cmd_line\n" >> $history                                                          # {Capture command line into $history file}
+
+     os_type=$(uname)                                                                                          # {Capture host OS details}
+     if [[ $os_type = "Linux" && -s /etc/system-profile ]];then
+          os=$($awk '/^version:/{ver=substr($2,1,index($2,".")-1)
+                       if ($2~/esx/) {gsub(/esx-/,"",ver);print "ESX"ver}
+                       else {print "CEL"ver}}'                      /etc/system-profile)
+          os_ver=$($awk '/^version/{gsub(/esx-/,"",$NF);print $NF}' /etc/system-profile)
+     else
+          os=$os_type
+          os_ver=$(uname -r)
+     fi
+
+     printf "\nData_Source: $host     {User_ID: ${id}, OS_type: ${os_type}, OS_ver: ${os_ver}}\n" >> $history  # {Capture Data_Source host info into $history file}
+
+     if   [[ -d /usr/symcli/bin ]];then                                                                        # {if present, export Solutions Enabler directory, else issue error msg & exit}
+          export PATH=$PATH:/usr/symcli/bin
+     else rc=$?                                                                                                # {if "/usr/symcli/bin" doesn't exists, issue error msg & exit}
+          printf "\nSolutions Enabler path \"/usr/symcli/bin\" not found on $host (RC: ${rc}).\n" >> $history
+          printf "\nRun \"${script}\" from a different host or install Solutions Enabler.\n"      >> $history
+          printf "\nSee $history for details.\n"                                                  >> $history
+          cat $history
+          exit $rc
+     fi
+
+}
+
+adt_cli () {
+
+# Syntax: adt_cli "$fields"                                                                                    # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: capture command line options & fields
+
+# Code:
+
+     for field in $(echo $1); do echo $field; done >> ${tmp}_fields
+
+     egrep "^-" ${tmp}_fields                      >> ${tmp}_options
+
+     egrep -v "^-" ${tmp}_fields                   >> ${tmp}_parms
+
+     if [[ -s ${tmp}_parms ]];then
+          $awk 'BEGIN {ct_eq=0}
+                $1~/=/{++ct_eq;if (ct_eq == 1) {printf("%s",$1)} else {printf("\n%s",$1)}}
+               $1!~/=/{printf(" %s",$1)}
+                  END {print ""}' ${tmp}_parms     >> ${tmp}_parms_fmt
+     fi
+
+     # Set options (0: option not set, 1: option set):
+
+     opt_o=0                                                                                                  # {set "-o" (override minimum Solutions Enabler base)  to false (0: default)}
+     opt_t=0                                                                                                  # {set "-t" (temporary: preserve $tmp_... work files)  to false (0: default)}
+     opt_x=0                                                                                                  # {set "-x" (expidite:  skip "symcfg discover" on audit host) to false (0: default)}
+
+     if egrep "o" ${tmp}_options > /dev/null;then opt_o=1;fi                                                  # {set "-o" (override minimum Solutions Enabler base)  to true (1)}
+     if egrep "t" ${tmp}_options > /dev/null;then opt_t=1;fi                                                  # {set "-t" (temporary: preserve $tmp_... work files)  to true (1)}
+     if egrep "x" ${tmp}_options > /dev/null;then opt_x=1;fi                                                  # {set "-x" (expidite:  skip "symcfg discover" on audit host) to true (1)}
+
+     options=$(sort -u ${tmp}_options | tr '\n' ' ')                                                          # {capture options specified on the command line}
+
+     # Set optional parm variables (format: <parm_var>=<parm_value>):
+
+          sid=""                                                                                                                                  # {initialize $sid to null}
+          suf=""                                                                                                                                  # {initialize $suf to null}
+
+     # Check/set optional parm override values:
+
+          if egrep "^sid=" ${tmp}_parms_fmt > /dev/null;then sid="$($awk '/^sid=/{print substr($0,index($0,"sid=")+4)}' ${tmp}_parms_fmt)";fi     # {If CLI "sid=<SID>" parm, set $sid}
+          if egrep "^suf=" ${tmp}_parms_fmt > /dev/null;then suf="$($awk '/^suf=/{print substr($0,index($0,"suf=")+4)}' ${tmp}_parms_fmt)";fi     # {If CLI "suf=<suffix>" parm, set $suf}
+
+}
+
+adt_cmd () {
+
+# Syntax: adt_cmd "$cmd" "$out" "$log"                                                                        # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: process Solutions Enabler commands (add "Cmd/RC/Std_Err" data to $history file).
+
+# Code:
+
+     $sudo $1 > $2 2>&1;rc=$?
+     printf "\n     RC: $rc   Cmd: $1\n" >> $3
+
+     if [[ $rc -ne 0 && -s $2 ]];then $awk '{printf("%12s %s\n",FS,$0)}' $2 >> $3;fi
+
+}
+
+adt_ext () {
+
+# Syntax: adt_ext "$rc" "$log" "$history"                                                                     # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: Check $rc for most recently run command.  If $rc non-zero, issue error msg & exit.
+
+# Code:
+
+     if   [[ $1 -ne 0 ]];then                                                                                 # {Check command return code.  If non-zero $rc, issue error msg & exit.}
+          printf "\nReliable audit requires accurate command output.\n"        >> $2
+          printf "\nWork with vendor to resolve issue and then retry audit.\n" >> $2
+          printf "\nSee $3 for details.\n"                                     >> $2
+          printf "\nEnd Timestamp: $(date '+%Y-%m-%d_%H:%M:%S_%Z')\n\n"        >> $2
+          dup_nul "$2" "$3"
+          cat $3
+          exit $1
+     fi
+
+}
+
+adt_cmn () {
+
+# Syntax: adt_cmn
+
+# Description: Capture "Local/Remote" VMAXs visible to audit host and set related common variables.
+
+# Code:
+
+     if [[ opt_x -eq 0 ]];then                                                                                 # {"-x" (0: run "symcfg discover", 1: don't run "symcfg discover")}
+          printf "\nRunning \"symcfg discover\" on $host.  May take a few minutes. Please be patient...\n"
+          cmd="symcfg discover";out="${tmp}_dis_cmn";adt_cmd "$cmd" "$out" "$log"
+     fi
+
+     cmd="symcli";out="${tmp}_cli_cmn";adt_cmd "$cmd" "$out" "$log"                                            # {Capture common (..._cmn) Solutions Enabler version file}
+     adt_ext "$rc" "$log" "$history"                                                                           # {Check $cmd $rc, if non-zero, capture STD_ERR, issue error msg & exit.}
+
+     cli_ver=$($awk '/SYMAPI Version/{print $5}' ${tmp}_cli_cmn)                                               # {Capture host's Solutions Enabler version (ex: "V8.0.1.0")}
+     cli_base=$($awk '/SYMAPI Version/{print substr($5,2,index($5,".")-2)}' ${tmp}_cli_cmn)                    # {Capture host's Solutions Enabler base    (ex:  "8" of "V8.0.1.0")}
+
+     if [[ $opt_o -eq 0 && $cli_base -lt 8 ]];then                                                             # {if "-o" is false (0) & $cli_base < minimum ("8"), issue error msg & exit}
+          rc=1
+          printf "\nRC: $rc, $host Solutions Enabler (${cli_ver}) is below minimum (V8.x).\n"    >> $history
+          printf "\nOptions are to upgrade Solutions Enabler or use \"-o\" (override) option.\n" >> $history
+          printf "\nCaution, if \"-o\" is used, vmax_audit results may not be accurate.\n\n"     >> $history
+          cat $history
+          exit $rc
+     fi
+
+     cmd="symcfg list -v";if [[ $sid = $pat_dec ]];then cmd="symcfg -sid $sid list -v";fi                      # {Set $cmd for all VMAXs or single VMAX if $sid matches $pat_dec}  
+     out="${tmp}_cfg-v_cmn";adt_cmd "$cmd" "$out" "$log"                                                       # {Capture common (..._cmn) VMAX "symcfg [-sid <SID>] list -v" output}
+     adt_ext "$rc" "$log" "$history"                                                                           # {Check "symcfg [-sid <SID>] list -v" $rc.  If non-zero, issue error msg & exit.}
+
+     $awk '/^Symmetrix ID:/{sn=$3;print sn}' ${tmp}_cfg-v_cmn | sort -u > $sns                                 # {Capture common (..._cmn) "Local/Remote" VMAX full 12 digit SN (000...) list}
+
+     num_lcl=$($awk '/^Symmetrix ID:/ && $4~/(Local)/'  ${tmp}_cfg-v_cmn | wc -l)                              # {Capture number of Local  VMAXs visible to $host}
+     num_rmt=$($awk '/^Symmetrix ID:/ && $4~/(Remote)/' ${tmp}_cfg-v_cmn | wc -l)                              # {Capture number of Remote VMAXs visible to $host}
+
+     printf "\nBegin summary audit for $num_lcl \"Local\" & $num_rmt \"Remote\" VMAXs from $host.\n"           # {VMAX audit start message}
+
+}
+
+adt_det () {
+
+# Syntax: adt_det "$sn"
+
+# Description: Capture "Local/Remote" VMAX detailed data for arrays visible to audit host.
+
+# Code:
+
+     $sudo rm -rf ${tmp}_aclx-devinfo     2>/dev/null                                                          # {Remove previous $sn ${tmp}_aclx-devinfo}
+     $sudo rm -rf ${tmp}_aclx-logins      2>/dev/null                                                          # {Remove previous $sn ${tmp}_aclx-logins}
+     $sudo rm -rf ${tmp}_audit-vtoc       2>/dev/null                                                          # {Remove previous $sn ${tmp}_audit-vtoc}
+     $sudo rm -rf ${tmp}_cfg-pool-tb      2>/dev/null                                                          # {Remove previous $sn ${tmp}_cfg-pool-tb}
+     $sudo rm -rf ${tmp}_cfg-ra-all       2>/dev/null                                                          # {Remove previous $sn ${tmp}_cfg-ra-all}
+     $sudo rm -rf ${tmp}_cfg-sa-all-v     2>/dev/null                                                          # {Remove previous $sn ${tmp}_cfg-sa-all-v}
+     $sudo rm -rf ${tmp}_dev-all          2>/dev/null                                                          # {Remove previous $sn ${tmp}_dev-all}
+     $sudo rm -rf ${tmp}_dev-all_fmt1     2>/dev/null                                                          # {Remove previous $sn ${tmp}_dev-all_fmt1}
+     $sudo rm -rf ${tmp}_disk             2>/dev/null                                                          # {Remove previous $sn ${tmp}_disk}
+
+     touch ${tmp}_aclx-devinfo            2>/dev/null                                                          # {Initialize current $sn ${tmp}_aclx-devinfo}
+     touch ${tmp}_aclx-logins             2>/dev/null                                                          # {Initialize current $sn ${tmp}_aclx-logins}
+     touch ${tmp}_audit-vtoc              2>/dev/null                                                          # {Initialize current $sn ${tmp}_audit-vtoc}
+     touch ${tmp}_cfg-pool-tb             2>/dev/null                                                          # {Initialize current $sn ${tmp}_cfg-pool-tb}
+     touch ${tmp}_cfg-ra-all              2>/dev/null                                                          # {Initialize current $sn ${tmp}_cfg-ra-all}
+     touch ${tmp}_cfg-sa-all-v            2>/dev/null                                                          # {Initialize current $sn ${tmp}_cfg-sa-all-v}
+     touch ${tmp}_dev-all                 2>/dev/null                                                          # {Initialize current $sn ${tmp}_dev-all}
+     touch ${tmp}_dev-all_fmt1            2>/dev/null                                                          # {Initialize current $sn ${tmp}_dev-all_fmt1}
+     touch ${tmp}_disk                    2>/dev/null                                                          # {Initialize current $sn ${tmp}_disk}
+
+     printf "\nSN: $sn\n"                                                                       >> $log        # {Capture VMAX $sn into $log staging file}
+
+     cmd="symaccess -sid $sn list devinfo";out="${tmp}_aclx-devinfo"       ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX ACLX masking DB data}
+     cmd="symaccess -sid $sn list logins" ;out="${tmp}_aclx-logins"        ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX ACLX login history data}
+     cmd="symaudit -sid $sn list -action_code vtoc";out="${tmp}_audit-vtoc";adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX audit log VTOC initialization record}
+     cmd="symcfg -sid $sn list -pool -tb" ;out="${tmp}_cfg-pool-tb"        ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX backend storage pool data}
+     cmd="symcfg -sid $sn list -ra all"   ;out="${tmp}_cfg-ra-all"         ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX SRDF RA (Remote Adapter) data}
+     cmd="symcfg -sid $sn list -sa all -v";out="${tmp}_cfg-sa-all-v"       ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX frontend SA (SCSI Adapter) data}
+     cmd="symdev -sid $sn list -all"      ;out="${tmp}_dev-all"            ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX internal Symdevs (all TDEVs, VDEVs, TDATs, ...)}
+     cmd="symdisk -sid $sn list"          ;out="${tmp}_disk"               ;adt_cmd "$cmd" "$out" "$log"       # {Capture $sn VMAX disk data & "/^Totals <Raw_MiB>/: $2"}
+
+     sed -e "s/N\/A          N\/A/N\/A       -  N\/A/g"\
+         -e 's/Not Visible/Not_Visible/g' -e 's/2-Way Mir/2-Way-Mir/g'         -e "s/Grp'd      /Grp'd  (h) /g"\
+         -e "s/Asst'd     /Asst'd (h) /g" -e 's/2-Way BCV Mir/2-Way-BCV-Mir/g' -e 's/RDF1 BCV/RDF1-BCV/g'\
+         -e 's/RDF2 BCV/RDF2-BCV/g'       -e 's/RDF1+Mir BCV/RDF1-Mir-BCV/g'   -e 's/RDF2+Mir BCV/RDF2-Mir-BCV/g'\
+         -e 's/RDF1+Mir/RDF1-Mir/g'       -e 's/RDF1+R-5/RDF1-R-5/g'           -e 's/RDF1+R-S/RDF1-R-S/g'\
+         -e 's/RDF2+Mir/RDF2-Mir/g'       -e 's/RDF2+R-5/RDF2-R-5/g'           -e 's/RDF2+R-S/RDF2-R-S/g'\
+         -e 's/3-Way Mir/3-Way-Mir/g'     -e 's/4-Way Mir/4-Way-Mir/g'         -e 's/BCV+R-5/BCV-R-5/g' ${tmp}_dev-all > ${tmp}_dev-all_fmt1     # Field justify ${tmp}_dev-all
+
+     echo ""
+     echo "              Timestamp: $(echo $ts      | $awk '{print FS$1}')"
+     echo "            Data_Source: $(echo $host    | $awk '{print FS$1}')"
+     echo "      Solutions_Enabler: $(echo $cli_ver | $awk '{print FS$1}')"
+     echo "                     SN: $(echo $sn      | $awk '{print FS$1}')"
+     echo "                  Model: $($awk 'BEGIN {fnd_sn=0};$0~"^Symmetrix ID: "sn{fnd_sn=1};/Product Model/{if (fnd_sn==1) {sub(/PowerMax_/,"PMAX",$NF);print FS$NF;fnd_sn=0}}' sn="$1" ${tmp}_cfg-v_cmn)"
+     echo "             AdtLogInit: $($awk 'BEGIN {fnd_vtoc=0};$NF~/VTOC/{if (fnd_vtoc==0) {fnd_vtoc=1;split($2,ary_date,"/");yyyy="20"ary_date[3]
+                                            mm=ary_date[1];dd=ary_date[2];date_init=yyyy"-"mm"-"dd;print " "date_init}}' ${tmp}_audit-vtoc)"
+     echo "               HyperMax: $($awk 'BEGIN {fnd_sn=0};$0~"^Symmetrix ID: "sn{fnd_sn=1};/Enginuity Build Version/{if (fnd_sn==1) {sub(/PowerMax_/,"PMAX",$NF);print FS$NF;fnd_sn=0}}' sn="$1" ${tmp}_cfg-v_cmn)"
+     echo "                Lcl_Rmt: $($awk '$0~"^Symmetrix ID: "sn{lcl_rmt=substr($4,2,length($4)-2);print FS""lcl_rmt}' sn="$sn" ${tmp}_cfg-v_cmn)"
+     echo "              #_Engines: $($awk 'BEGIN {eng=0};/Director Engine Number/{if ($NF > eng) {eng=$NF}};END {printf(" %5s\n",eng)}' ${tmp}_cfg-sa-all-v)"
+     echo "    #_FE_SA_Ports_total: $($awk 'BEGIN {num_sa_pts=0};/Director Port Speed/{if ($NF~/[0-9]/) {++num_sa_pts}};END {printf(" %5s\n",num_sa_pts)}' ${tmp}_cfg-sa-all-v)"
+     echo "    #_FE_SA_Ports_login: $($awk '$0~/^Director Identification/{dir_id=$NF};$0~/^Director Port/{dir_pt=$NF}
+                                            $0!~/^5000097/ && $0~/Yes    Yes$/{print dir_id" "dir_pt}' ${tmp}_aclx-logins | sort -u | wc -l | $awk '{printf("%6d\n",$1)}')"
+     echo "   Cache_Mirrored_(TiB): $($awk 'BEGIN {fnd_sn=0};$0~"^Symmetrix ID: "sn{fnd_sn=1}
+                                            /Cache Size \(Mirrored)/{if (fnd_sn==1) {cache_tb=($(NF-1)/1024/1024);printf("%6.2f\n",cache_tb);fnd_sn=0}}' sn="$1" ${tmp}_cfg-v_cmn)"
+     echo "         Pool_Raw_(TiB): $($awk '/^Totals/{pl_raw=sprintf("%6.1f",($2/1024/1024));print pl_raw}' ${tmp}_disk)"
+     echo "      Pool_Usable_(TiB): $($awk '/^TBs/{pl_usbl=sprintf("%6.1f",$2);printf("%5s\n",pl_usbl)}' ${tmp}_cfg-pool-tb)"
+     echo "        Pool_Used_(TiB): $($awk '/^TBs/{pl_used=sprintf("%6.1f",$4);printf("%5s\n",pl_used)}' ${tmp}_cfg-pool-tb)"
+     echo "          Pool_Used_(%): $($awk '/^TBs/{pl_used_pct=$5;printf("%6.1f\n",pl_used_pct)}'        ${tmp}_cfg-pool-tb)"
+     echo "        Pool_Comp_Ratio: $($awk '/^TBs/{pl_comp_rat=$6;printf(" %5s\n",pl_comp_rat)}'         ${tmp}_cfg-pool-tb)"
+     echo "    Cap_TDEVs_All_(TiB): $($awk '$4~/TDEV/ && $NF~pat_dec{if ($4!="Int+TDEV") {print $NF}}' pat_dec="$pat_dec" ${tmp}_dev-all_fmt1 | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+     echo "    Cap_TDEVs_Lcl_(TiB): $($awk '$4~/TDEV/ && $NF~pat_dec{if ($4!="Int+TDEV" && $4!~/RDF/) {print $NF}}' pat_dec="$pat_dec" ${tmp}_dev-all_fmt1 | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+     echo "    Cap_TDEVs_R1s_(TiB): $($awk '$4=="RDF1+TDEV" && $NF~pat_dec{print $NF}' pat_dec="$pat_dec" ${tmp}_dev-all_fmt1 | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+     echo "    Cap_TDEVs_R2s_(TiB): $($awk '$4=="RDF2+TDEV" && $NF~pat_dec{print $NF}' pat_dec="$pat_dec" ${tmp}_dev-all_fmt1 | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+     echo "    Cap_VDEVs_All_(TiB): $($awk '$4~/VDEV/ && $NF~pat_dec{print $NF}' pat_dec="$pat_dec" ${tmp}_dev-all_fmt1 | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+     echo "Cap_[TV]DEVs_ACLX_(TiB): $($awk '$1~pat_symdev && $(NF-1)~pat_dec{print $1,$(NF-1)}' pat_dec="^${pat_dec}$" pat_symdev="^${pat_symdev}$" ${tmp}_aclx-devinfo |\
+                                      sort -u | $awk '{print $2}' | sort | uniq -c | sort |\
+                                      $awk 'BEGIN {cap_ttl_mb=0};{add_mb=$1*$2;cap_ttl_mb=cap_ttl_mb+add_mb};END {printf("%6.1f\n",cap_ttl_mb/1024/1024)}')"
+
+}
+
+adt_sum () {
+
+# Syntax: adt_sum "$details" "$summary"
+
+# Description: Create one line audit summary for each "Local/Remote" VMAX visible to $host
+
+# Code:
+
+     $awk '$1=="RC:"{rc=$2;print rc}' $log | sort -un > $rcs                                                         # {Create unique numerically sorted return code list}
+     rc_max=0;if [[ $(egrep -v "^0$" $rcs | wc -l) -gt 0 ]];then rc_max=$(egrep -v "^0$" $rcs | tail -1);fi          # {If present, capture largest non-zero return code}
+
+     $awk                 'NR==1 {printf("\nTimestamp: %s   Data_Source: %-s   SYMCLI: %s   #_Local_VMAXs: %-s   #_Remote_VMAXs: %s   max_RC: %s   {if RC != 0, see History file}\n\n",
+                                         ts,host,cli_ver,num_lcl,num_rmt,rc_max)
+                                  hdr_01a="                                                 Cache  <-------------Pool------------>"
+                                  hdr_02a="                                             Eng (Mir)   Raw    Usbl   Used  Used Comp "
+                                  hdr_03a="  Serial_#    Model      HyperMax    Lcl/Rmt (#) (TiB)  (TiB)  (TiB)  (TiB)  (%)  Ratio"
+                                  hdr_04a="------------ -------- -------------- ------- --- ----- ------ ------ ------ ----- -----"
+                                  hdr_01b=" <-------------------TDEVs------------------->  Mask  Mask/  Mask/"
+                                  hdr_02b="   Cfg    Lcl   Lcl    R1s   R1s    R2s   R2s  (ACLX) Usbl   Used"
+                                  hdr_03b="  (TiB)  (TiB)  (%)   (TiB)  (%)   (TiB)  (%)   (TiB)  (%)    (%)  AdtLogInit"
+                                  hdr_04b=" ------ ------ ----- ------ ----- ------ ----- ------ -----  ----- ----------"
+                                  printf("%140s Subscription\n",FS)
+                                  print hdr_01a""hdr_01b
+                                  print hdr_02a""hdr_02b
+                                  print hdr_03a""hdr_03b
+                                  print hdr_04a""hdr_04b}
+                            /SN:/{sn=$NF}
+                         /Model:/{model=$NF}
+                    /AdtLogInit:/{date_init=$NF}
+                      /HyperMax:/{hypmx=$NF}
+                       /Lcl_Rmt:/{loc=$NF}
+                     /#_Engines:/{eng=$NF}
+         /Cache_Mirrored_\(TiB):/{cache=$NF}
+               /Pool_Raw_\(TiB):/{pool_raw_tb=$NF}
+            /Pool_Usable_\(TiB):/{pool_usbl_tb=$NF}
+              /Pool_Used_\(TiB):/{pool_used_tb=$NF}
+                /Pool_Used_\(%):/{pool_used_pct=$NF}
+               /Pool_Comp_Ratio:/{pool_comp_rat=$NF}
+          /Cap_TDEVs_All_\(TiB):/{tdev_all_tb=$NF}
+          /Cap_TDEVs_Lcl_\(TiB):/{tdev_lcl_tb=$NF;tdev_lcl_pct="n/a";if (tdev_all_tb != 0) {tdev_lcl_pct=sprintf("%5.1f",100*tdev_lcl_tb/tdev_all_tb)}}
+          /Cap_TDEVs_R1s_\(TiB):/{tdev_r1s_tb=$NF;tdev_r1s_pct="n/a";if (tdev_all_tb != 0) {tdev_r1s_pct=sprintf("%5.1f",100*tdev_r1s_tb/tdev_all_tb)}}
+          /Cap_TDEVs_R2s_\(TiB):/{tdev_r2s_tb=$NF;tdev_r2s_pct="n/a";if (tdev_all_tb != 0) {tdev_r2s_pct=sprintf("%5.1f",100*tdev_r2s_tb/tdev_all_tb)}}
+          /Cap_VDEVs_All_\(TiB):/{vdev_all_tb=$NF}
+     /Cap_\[TV]DEVs_ACLX_\(TiB):/{mask_tb=$NF
+                                  mask_usbl_pct="n/a";if (pool_usbl_tb != 0) {mask_usbl_pct=sprintf("%5.1f",100*mask_tb/pool_usbl_tb)}
+                                  mask_used_pct="n/a";if (pool_used_tb != 0) {mask_used_pct=sprintf("%5.1f",100*mask_tb/pool_used_tb)}
+                                  printf ("%-12s %-8s %-14s %-8s %-2s %5s %6s %6s %6s %5s %5s %6s %6s %5s %6s %5s %6s %5s %6s %5s  %5s %10s\n",
+                                          sn,model,hypmx,loc,eng,cache,pool_raw_tb,pool_usbl_tb,pool_used_tb,pool_used_pct,pool_comp_rat,tdev_all_tb,tdev_lcl_tb,
+                                          tdev_lcl_pct,tdev_r1s_tb,tdev_r1s_pct,tdev_r2s_tb,tdev_r2s_pct,mask_tb,mask_usbl_pct,mask_used_pct,date_init)}
+                             END {print ""}
+                      ' ts="$ts" host="$host" cli_ver="$cli_ver" num_lcl="$num_lcl" num_rmt="$num_rmt" rc_max="$rc_max" $1 > $2
+
+     if [[ -n $suf ]];then                                                                                     # {If "suf=<suffix>", append $suf to "History/Details/Summary" output files}
+          mv $history ${history}_${suf};history=${history}_${suf}
+          mv $details ${details}_${suf};details=${details}_${suf}
+          mv $summary ${summary}_${suf};summary=${summary}_${suf}
+     fi
+
+     printf "\nVMAX Audit History:  $history     {timestamps, data source, commands, RCs (max_RC: ${rc_max}), STD_ERR msgs}\n" >> $log
+     printf "\nVMAX Audit Details:  $details     {multiple lines per VMAX}\n"                                                  >> $log
+     printf "\nVMAX Audit Summary:  $summary     {single line per VMAX}\n\n"                                                   >> $log
+
+     printf "\nMax_RC: $rc_max\n"                                                  >> $history                 # {Capture max return code in $history file}
+     printf "\nAudit History:\n"                                                   >> $history                 # {Create $log header}
+
+     dup_nul "$log" "$history"                                                                                 # {append $log to $history minus consecutive duplicate "zero field" (ex: null) records}
+
+     tail -7 $history                                                                                          # {Display $history, $details, $summary file names to screen}
+
+     printf "End Timestamp: $(date '+%Y-%m-%d_%H:%M:%S_%Z')\n\n"                   >> $history                 # {Capture ending timestamp into $history file}
+
+}
+
+# Begin Main Program
+
+script=$0                                                                                                      # {Capture script name}
+
+fields=$*                                                                                                      # {Capture script parameters}
+
+cmd_line="$script $fields"                                                                                     # {"prompt test" for $cmd_line}
+
+adt_env                                                                                                        # {"discover/initialize" environment}
+
+adt_cli "$fields"                                                                                              # {Capture command line options & parms}
+
+adt_cmn                                                                                                        # {Capture common (..._cmn) "host/storage" for $host}
+
+for sn in $(cat $sns);do adt_det "$sn";done > $details                                                         # {Capture detailed storage data for each "Local/Remote" VMAX} 
+
+adt_sum "$details" "$summary"                                                                                  # {Create one line summary for each "Local/Remote" VMAX visible to audit host}
+
+if [[ $opt_t -eq 0 ]];then $sudo rm -rf ${tmp}_*;fi                                                            # {"-t" (0: remove "$tmp_..." work files, 1: preserve "$tmp_..." work files)}
+
+exit $rc                                                                                                       # {exit main program}
+
+# End Main Program
