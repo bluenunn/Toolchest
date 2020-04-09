@@ -1,0 +1,1938 @@
+#!/bin/ksh
+
+########################################################################################## (ASMLIST Utility) ##########################################################################################
+#                                                                                                                                                                                                     #
+#            Name:  asmlist_r003.ksh.txt                               {Modified: 04/08/20, Created: 01/05/18, Author: Bill Nunn}                                                                     #
+#                                                                                                                                                                                                     #
+#        Overview:  ASMLIST utility is designed to run on a physical RHEL (RedHat Enterprise Linux) Oracle ASM RAC node provisioned with block storage managed by RHEL native multipath.              #
+#                   Utility uses "blkid" & "multipath -ll" commands & "kfed" ASM utility commands to correlate shared RAC ASM Disk names with corresponding LUN IDs and and should work               #
+#                   for any block storage vendor.  For recognized block storage vendors, array specific data is returned in "$orasm" (/tmp/orasm) audit file (EMC: <VMAX_SN>, <Symdev>,               #
+#                   Netapp: <7Mode|cDOT>, <LUN_SN>).  Optionally, ASMLIST may also use storage vendor specific commands or imported data files to provide backend internal device types               #
+#                   and backend array capacity utilization data at 3 different levels of granularity (Oracle ASM "DB(s)/Disk Groups/Disks").  For EMC VMAX related ASMLIST audits, the                #
+#                   recommended SYMCLI version on the RAC node from which audit is run should match current version supported by GIS (V8.4.0.7 on utility "modified" date of 04/26/18).               #
+#                   Some of the lower V8.x SYMCLI versions tested did not return valid content for fields "Cfg_MiB, Alc_MiB, %_Alc, Usd_MiB, Alc/Usd".  For older SYMCLI versions or                  #
+#                   unsupported block storage platforms, "-" may be used as a field placeholder.  If ASMLIST is not run as root, "sudo" password may be required.  ASMLIST only needs                 #
+#                   to be run on a single node within a RAC to obtain data for all shared LUNs across the RAC.  The RAC node run from should be in range of "1-9" or parsing of DB(s)                 #
+#                   running on RAC may be incorrect.  "ps -ef | awk '$NF~/ora_pmon/{print h,substr($NF,10)}' h=$(hostname)" returns RAC node # and DB instance(s) running on host.                    #
+#                   If ASMLIST detects shared ASM Disk anomolies on the host (ex: "duplicate ASM Disk label for multiple LUNs" or "unique sorted list of ASM Disks from "blkid" vs                    #
+#                   "oracleasm listdisks" don't match"), utility issues a warning message and in case of "duplicate" ASM Disk labels will identify the "valid" LUN related to the                     #
+#                   duplicate ASM Disk label. If no anomolies are detected, warning messages and "Duplicates:" table will not be included in "$orasm" output file (/tmp/orasm).                       #
+#                                                                                                                                                                                                     #
+#    Repositories:  https://github.com/bluenunn/Toolchest/                                                                                                                                            #
+#                                                                                                                                                                                                     #
+#          Syntax:  ./asmlist [-cdhtx] [bnd=/tmp/<bound_file>] [dev=/tmp/<device_file>]                                                                                                               #
+#                               :::::            ::::::::::::            :::::::::::::                                                                                                                #
+#                               :::::            ::::::::::::            :::::::::::::---(Stage imported VMAX "<device_file>" in "/tmp" to avoid permission issues (ex: "dev=/tmp/vmax_devices").)    #
+#                               :::::            ::::::::::::                                                                                                                                         #
+#                               :::::            ::::::::::::----------------------------(Stage imported VMAX "<bound_file>"  in "/tmp" to avoid permission issues (ex: "bnd=/tmp/vmax_bound").)      #
+#                               :::::                                                                                                                                                                 #
+#         Options:              :::::---("-x": "hex_devs"    - Optional, ASMLIST returns recognized internal block storage devices in "hex" ($opt_x: 1) versus ASCII ($opt_x: 0, default))            #
+#                               ::::----("-t": "temporary"   - Optional, ASMLIST "${tmp}_..." ("/tmp/asmtmp_...") work files are not removed at the end of execution.)                                #
+#                               :::-----("-h": "hostname"    - Optional, add "Hostname" field to "Oracle ASM Disk Groups:" & "Oracle ASM Disks:" sections, default "Oracle ASM DB(s):" only.)         #
+#                               ::------("-d": "decode_only" - Optional, "ASM Disk <=> LUN" decode only.  Backend LUN fields "Type, Cfg_MiB, Alc_MiB, %_Alc, Usd_MiB, Alc/Usd" not returne.)          #
+#                               :-------("-c": "clock"       - Optional, add "<Date>" prefix to all "$orasm" output sections (default: "<Date>" prefix for "Oracle ASM DB(s):" section only.)         #
+#                                                                                                                                                                                                     #
+#           Parms:   [bnd=<bound_file>]  - Optional, allows file of backend LUN capacity data captured for one or more VMAXs on an external host to be used on RAC node wher ASMLIST is run.          #
+#                                          "bnd=..." parm is supported for VMAX "symcfg -sid $sn -tdev -bound list -mb" command.  Use parm for RAC nodes with unsupported or missing SYMCLI SW.       #
+#                                          If CLI "-d" ("decode_only") option specified, "bnd=..." parm will be ignored.                                                                              #
+#                                                                                                                                                                                                     #
+#                    [dev=<device_file>] - Optional, allows file of backend LUN type data captured for one or more VMAXs on an external host to be used on RAC node wher ASMLIST is run.              #
+#                                          "dev=..." parm is supported for VMAX "symdev -sid $sn list" command.  Use parm for RAC nodes with unsupported or missing SYMCLI SW.                        #
+#                                          If CLI "-d" ("decode_only") option specified, "dev=..." parm will be ignored.                                                                              #
+#                                                                                                                                                                                                     #
+#                    Sample VMAX "<bound_file>", "<device_file>" data captures (recommend use on SAN management host running a GIS supported version EMC Solutions Enabler):                          #
+#                                 ::::::::::::    :::::::::::::                                                                                                                                       #
+#                                 ::::::::::::----:::::::::::::---(Currently, "<bound_file>" & "<device_file>" are only supported for VMAX.)                                                          #
+#                                                                                                                                                                                                     #
+#                         for sn in 000196801345 000197800973;do sudo /usr/symcli/bin/symcfg -sid $sn -tdev -bound list -mb;done > /tmp/vmax_bound       # {CLI "bnd=..." VMAX data collection}       #
+#                                                                                                                                                                                                     #
+#                         for sn in 000196801345 000197800973;do sudo /usr/symcli/bin/symdev -sid $sn list;done > /tmp/vmax_devices                      # {CLI "dev=..." VMAX data collection}       #
+#                                   :::::::::::: ::::::::::::                                                                                                                                         #
+#                                   ::::::::::::-::::::::::::---(VMAX SNs in external host data collection "for loop" must match all SNs used by Oracle DB LUNs where ASMLIST is run.)                #
+#                                                               ("bnd=..." & "dev=..." parms are optional & independent (e.g. zero, one or both parms may be used when running ASMLIST.)              #
+#                                                               ("sudo" may not be required if logged in as "root" on external host running "bnd=/dev=" data collection "for loop"(s).)               #
+#                                                                                                                            s                                                                        #
+#  LUN ID Schemas:                                                                                                                                                                                    #
+#                                                                                                                                                                                                     #
+#       IEEE Block Storage Vendor OUI (Organizationally Unique Identifier) Repository:  http://standards.ieee.org/develop/regauth/oui/oui.txt                                                         #
+#                                                                                                                                                                                                     #
+#       EMC VMAX IEEE NAA6 LUN UUID decode (hex, 16 bytes):     {UUID (Universally Unique IDentifier)}                                                                                                #
+#                                                                                                                                                                                                     #
+#            :--------------------------------------------------{x'6': indicates 16 byte IEEE NAA6 LUN UUID}                                                                                          #
+#            :                                                                                                                                                                                        #
+#            60000970000196801345533030354538                                                                                                                                                         #
+#            ||||||| ::::::::::::  ||||||||||                                                                                                                                                         #
+#            ||||||| ::::::::::::  ||||||||||---{x'3030354538':   VMAX Symdev (hex, 5 bytes), a'005E8' (ASCII, 5 chars), leading zero (Solutions Enabler >= 8x)}                                      #
+#            ||||||| ::::::::::::---------------{x'000196801345': VMAX Array S/N (hex = dec (always 0-9), 12 digits, format: 000...)}                                                                 #
+#            |||||||----------------------------{x'6000097...':   VMAX IEEE NAA6 LUN UUID format (hex, 16 bytes)}                                                                                     #
+#             ::::::----------------------------{x '000097':      VMAX IEEE OUI (hex, 3 bytes)}                                                                                                       #
+#                                                                                                                                                                                                     #
+#           *Note: EMC VMAX"2|3|AFA" IEEE assigned OUI is x'000097'.                                                                                                                                  #
+#                                                                                                                                                                                                     #
+#       NETAPP (Data OnTap: 7Mode or cDOT) IEEE NAA6 LUN UUID decode (hex, 16 bytes):                                                                                                                 #
+#                                                                                                                                                                                                     #
+#            <netid>0486e542d4f5a2f47694d684b                                                                                                                                                         #
+#            ||||||| ::::::::::::::::::::::::                                                                                                                                                         #
+#            ||||||| ::::::::::::::::::::::::---{x'486e542d4f5a2f47694d684b' Netapp LUN S/N (hex, 12 bytes), a'HnT-OZ/GiMhK' (ASCII, 12 chars, Netapp CLI "lun show -v")                              #
+#            |||||||                                                                                                                                                                                  #
+#            60a9800----------------------------{x'60a9800...': 7Mode IEEE NAA6 LUN UUID format (hex, 16 bytes)}                                                                                      #
+#            600a098----------------------------{x'600a098...'   cDOT IEEE NAA6 LUN UUID format (hex, 16 bytes)}                                                                                      #
+#             ::::::                                                                                                                                                                                  #
+#             ::::::----------------------------{x '0a9800':    7Mode IEEE OUI (hex, 3 bytes)}                                                                                                        #
+#             ::::::----------------------------{x '00a098':     cDOT IEEE OUI (hex, 3 bytes)}                                                                                                        #
+#                                                                                                                                                                                                     #
+#  Sample Audit Files ($orasm = /tmp/orasm):                                                                                                                                                          #
+#                                                                                                                                                                                                     #
+#     Sample 01) "-d" option specified ("decode only": $opt_d = 1,) for SVL VMAX DARE (Data At Rest Encryption) POC:                                                                                  #
+#                                                                                                                                                                                                     #
+#          The ASMLIST audit below was performed following two seperate non-disruptive "forward/reverse" ASM migrations performed under Oracle load generated by HammerDB benchmark tool.             #
+#          Both migrations were performed using ASM "Add => Rebalance => Remove" sequence.  Audit shown was performed following completion of the 2nd ("reverse") migration.  "$orasm"                #
+#          (/tmp/orasm output file) captures the state of the ASM Disks (single partition formed from a LUN) following the "reverse" (2nd) migration performed.  "ASM_Sts" (ASM Status)               #
+#          field may be used to distinguish between "Source" LUNs (ASM_Sts: FORMER) and "Target" LUNs (ASM_Sts: MEMBER) following the migration.  If an ASM Disk "Source/Target" pair is              #
+#          actively involved in a migration (e.g. ASM "Rebalance" is active for the pair), the Source & Target Disks in the pair should have an "ASM_Sts" of "MEMBER".   "ASM_Typ" returns            #
+#          the disk type in the ASM Disk header (ex: DISKHEAD, INVALID, ...).  In this example, all of the ASM Disks not affiliated with a Group are labeled as INVALID in the disk header.           #
+#                                                                                                                                                                                                     #
+#               01) "forward" ASM migration under load: "non-DARE: VMAX100K_01755 => VMAX250FX_02076 :DARE"                                                                                           #
+#                                                                                                                                                                                                     #
+#               02) "reverse" ASM migration under load: "DARE: VMAX250FX_02076 => VMAX100K_01755 :non-DARE"                                                                                           #
+#                                                                                                                                                                                                     #
+#          Following shows how ASMLIST "/tmp/orasm" output file may be used verify "Source/Target" Disks (e.g. LUNs) upon completion of "reverse" ("DARE => non-DARE" array) ASM migration.           #
+#          Depending on which single letter options (if any) were used (e.g. "./asmlist -cdh"), it may be necessary to adjust positional parm values in post migration parsing syntax:                #
+#                                                                                                                                                                                                     #
+#                                        ::-($9: <LUN_ID>)-::         ::---------------($6: <ASM_Sts>)--------------::    :::---:::---($12"_"$13: <Model>_<Array_SN>)                                 #
+#                                        ::                ::         ::                                            ::    ::    :::                                                                   #
+#               lnxdb-svl-23:/tmp $ awk '$9~/^6/ && length($9)==32 && $6!="-" {print "x ASM DISKS with ASM_Status: "$6" ("$12"_"$13")"}' /tmp/orasm  | sort | uniq -c                                 #
+#                   50 x ASM DISKS with ASM_Status: FORMER (VMAX250F_000197802076)                                                                                                                    #
+#                   50 x ASM DISKS with ASM_Status: MEMBER (VMAX100K_000196801755)                                                                                                                    #
+#                                                   ::::::                                                                                                                                            #
+#                                                   ::::::---("FORMER": ASM migration Source Disks)                                                                                                   #
+#                                                   ::::::---("MEMBER": ASM migration Target Disks)                                                                                                   #
+#                                                                                                                                                                                                     #
+#     lnxdb-svl-23:/tmp $ view /tmp/orasm          # {Syntax: "./asmlist -chd", Runtime: 10 seconds}                                                                                                  #
+#                                                                                                                                                                                                     #
+#     Host LUN Summary:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      #_LUNs  Platform       Size   Pathset      #_Paths  Status                                                                                                            #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  1024M  0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  1024M  0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       1  EMC,SYMMETRIX  1.0T   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  16G    0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  16G    0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      15  EMC,SYMMETRIX  272G   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  272G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      62  EMC,SYMMETRIX  545G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      62  EMC,SYMMETRIX  545G   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       1  EMC,SYMMETRIX  5.6M   0,2             2     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  5.6M   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  5.6M   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       5  EMC,SYMMETRIX  68G    0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       8  EMC,SYMMETRIX  8.0G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       8  EMC,SYMMETRIX  8.0G   0,1,2,3         4     active_ready_running                                                                                              #
+#                                                                                                                                                                                                     #
+#     Messages:                                                                                                                                                                                       #
+#                                                                                                                                                                                                     #
+#          Warning: "ps -ef | egrep ora_pmon" DB(s): CFNDARE doesn't match kfed "kfdhdb.dskname:" prefix DB(s) CFNDARE,CFNSVL6                                                                        #
+#                                                                                                                                                                                                     #
+#          Warning: ASMLIST has used kfed "kfdhdb.dskname:" prefix DB(s) CFNDARE,CFNSVL6 for performing this audit.                                                                                   #
+#                                                                                                                                                                                                     #
+#          Warning: DB CFNDARE contains 34 ASM Disks not associated with any ASM Disk Groups (single "-" in /tmp/orasm).                                                                              #
+#                                                                                                                                                                                                     #
+#          Warning: DB CFNSVL6 contains 34 ASM Disks not associated with any ASM Disk Groups (single "-" in /tmp/orasm).                                                                              #
+#                                                                                                                                                                                                     #
+#     Oracle ASM DB(s):                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      OS_Rel    SYMCLI    Ora_DB   #_Grp  #_Shr                                                                                                                             #
+#     2018_07-18  lnxdb-svl-23  RHEL_7.4  V8.4.0.7  CFNDARE    44     78                                                                                                                              #
+#     2018_07-18  lnxdb-svl-23  RHEL_7.4  V8.4.0.7  CFNSVL6    44     78                                                                                                                              #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disk Groups:                                                                                                                                                                         #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      ASM_Disk_Group   ASM_Disk_Base  #_Grp                                                                                                                                 #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_AR    CFNDARE_AR        4                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT01  CFNDARE_DT01      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNDARE_DT02      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_FRA   CFNDARE_FRA       8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC    CFNDARE_RC        8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNDARE_RC_M      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_AR    CFNSVL6_AR        4                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT01  CFNSVL6_DT01      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNSVL6_DT02      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_FRA   CFNSVL6_FRA       8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC    CFNSVL6_RC        8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNSVL6_RC_M      8                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_A      4                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_B      4                                                                                                                                  #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_C      4                                                                                                                                  #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disks:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      ASM_Disk_Group   ASM_Disk               ASM_Typ   ASM_Sts  Size   Mpath    LUN_ID                            OUI     Platform   Model     Array_SN|OS   Device        #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNDARE_DT02_545G_05   DISKHEAD  FORMER   545G   mpathgw  60000970000197802076533030303531  000097  SYMMETRIX  VMAX250F  000197802076  00051         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNDARE_DT02_545G_06   DISKHEAD  FORMER   545G   mpathfy  60000970000197802076533030303339  000097  SYMMETRIX  VMAX250F  000197802076  00039         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNDARE_DT02_545G_07   DISKHEAD  FORMER   545G   mpathgu  60000970000197802076533030303446  000097  SYMMETRIX  VMAX250F  000197802076  0004F         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNDARE_DT02_545G_08   DISKHEAD  FORMER   545G   mpathgh  60000970000197802076533030303432  000097  SYMMETRIX  VMAX250F  000197802076  00042         #
+#     2018_07-18  lnxdb-svl-23  -                CFNDARE_DT03_545G_01   INVALID   -        545G   mpathge  60000970000197802076533030303346  000097  SYMMETRIX  VMAX250F  000197802076  0003F         #
+#     2018_07-18  lnxdb-svl-23  -                CFNDARE_DT03_545G_02   INVALID   -        545G   mpathfs  60000970000197802076533030303333  000097  SYMMETRIX  VMAX250F  000197802076  00033         #
+#     2018_07-18  lnxdb-svl-23  -                CFNDARE_DT03_545G_03   INVALID   -        545G   mpathfx  60000970000197802076533030303338  000097  SYMMETRIX  VMAX250F  000197802076  00038         #
+#     2018_07-18  lnxdb-svl-23  -                CFNDARE_DT03_545G_04   INVALID   -        545G   mpathhe  60000970000197802076533030303539  000097  SYMMETRIX  VMAX250F  000197802076  00059         #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_05   DISKHEAD  MEMBER   545G   mpathbg  60000970000196801755533030314633  000097  SYMMETRIX  VMAX100K  000196801755  001F3         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_06   DISKHEAD  MEMBER   545G   mpathdd  60000970000196801755533030323234  000097  SYMMETRIX  VMAX100K  000196801755  00224         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_07   DISKHEAD  MEMBER   545G   mpathcp  60000970000196801755533030323136  000097  SYMMETRIX  VMAX100K  000196801755  00216         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_08   DISKHEAD  MEMBER   545G   mpathbs  60000970000196801755533030314646  000097  SYMMETRIX  VMAX100K  000196801755  001FF         #
+#     2018_07-18  lnxdb-svl-23  -                CFNSVL6_DT03_545G_01   INVALID   -        545G   mpathdc  60000970000196801755533030323233  000097  SYMMETRIX  VMAX100K  000196801755  00223         #
+#     2018_07-18  lnxdb-svl-23  -                CFNSVL6_DT03_545G_02   INVALID   -        545G   mpathbh  60000970000196801755533030314634  000097  SYMMETRIX  VMAX100K  000196801755  001F4         #
+#     2018_07-18  lnxdb-svl-23  -                CFNSVL6_DT03_545G_03   INVALID   -        545G   mpathbk  60000970000196801755533030314637  000097  SYMMETRIX  VMAX100K  000196801755  001F7         #
+#     2018_07-18  lnxdb-svl-23  -                CFNSVL6_DT03_545G_04   INVALID   -        545G   mpathdm  60000970000196801755533030323244  000097  SYMMETRIX  VMAX100K  000196801755  0022D         #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNSVL6_RC_M_16G_05    DISKHEAD  MEMBER   16G    mpathab  60000970000196801755533030314345  000097  SYMMETRIX  VMAX100K  000196801755  001CE         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNSVL6_RC_M_16G_06    DISKHEAD  MEMBER   16G    mpathak  60000970000196801755533030314441  000097  SYMMETRIX  VMAX100K  000196801755  001DA         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNSVL6_RC_M_16G_07    DISKHEAD  MEMBER   16G    mpathan  60000970000196801755533030314530  000097  SYMMETRIX  VMAX100K  000196801755  001E0         #
+#     2018_07-18  lnxdb-svl-23  DG_CFNSVL6_RC_M  CFNSVL6_RC_M_16G_08    DISKHEAD  MEMBER   16G    mpathap  60000970000196801755533030314532  000097  SYMMETRIX  VMAX100K  000196801755  001E2         #
+#     2018_07-18  lnxdb-svl-23  -                DBBS3DM_AR_268G_001    INVALID   -        272G   mpathbc  60000970000196801755533030314546  000097  SYMMETRIX  VMAX100K  000196801755  001EF         #
+#     2018_07-18  lnxdb-svl-23  -                DBBS3DM_AR_268G_002    INVALID   -        272G   mpathax  60000970000196801755533030314541  000097  SYMMETRIX  VMAX100K  000196801755  001EA         #
+#     2018_07-18  lnxdb-svl-23  -                DBBS3DM_AR_268G_003    INVALID   -        272G   mpathbe  60000970000196801755533030314631  000097  SYMMETRIX  VMAX100K  000196801755  001F1         #
+#     2018_07-18  lnxdb-svl-23  -                DBBS3DM_DT01_268G_001  INVALID   -        272G   mpathay  60000970000196801755533030314542  000097  SYMMETRIX  VMAX100K  000196801755  001EB         #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_C_1G_1      DISKHEAD  FORMER   1024M  mpathib  60000970000197802076533030303945  000097  SYMMETRIX  VMAX250F  000197802076  0009E         #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_C_1G_2      DISKHEAD  FORMER   1024M  mpathic  60000970000197802076533030303946  000097  SYMMETRIX  VMAX250F  000197802076  0009F         #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_C_1G_01     DISKHEAD  MEMBER   1024M  mpathm   60000970000196801755533030314246  000097  SYMMETRIX  VMAX100K  000196801755  001BF         #
+#     2018_07-18  lnxdb-svl-23  EMCDARE_CL       EMCDARE_CL_C_1G_02     DISKHEAD  MEMBER   1024M  mpathn   60000970000196801755533030314330  000097  SYMMETRIX  VMAX100K  000196801755  001C0         #
+#                                                                                                                                                                                                     #
+#     Sample 02) "-d" option not specified (no "decode only": $opt_d = 0,) for SVL VMAX DARE (Data At Rest Encryption) POC:                                                                           #
+#                                                                                                                                                                                                     #
+#          The ASMLIST audit below was performed following two seperate non-disruptive "forward/reverse" ASM migrations performed under Oracle load generated by HammerDB benchmark tool.             #
+#          Both migrations were performed using ASM "Add => Rebalance => Remove" sequence.  Audit shown was performed following completion of the 2nd ("reverse") migration.  "$orasm"                #
+#          (/tmp/orasm output file) captures the state of the ASM Disks (single partition formed from a LUN) following the "reverse" (2nd) migration performed.  "ASM_Sts" (ASM Status)               #
+#          field may be used to distinguish between "Source" LUNs (ASM_Sts: FORMER) and "Target" LUNs (ASM_Sts: MEMBER) following the migration.  If an ASM Disk "Source/Target" pair is              #
+#          actively involved in a migration (e.g. ASM "Rebalance" is active for the pair), the Source & Target Disks in the pair should have an "ASM_Sts" of "MEMBER".   "ASM_Typ" returns            #
+#          the disk type in the ASM Disk header (ex: DISKHEAD, INVALID, ...).  In this example, all of the ASM Disks not affiliated with a Group are labeled as INVALID in the disk header.           #
+#                                                                                                                                                                                                     #
+#               01) "forward" ASM migration under load: "non-DARE: VMAX100K_01755 => VMAX250FX_02076 :DARE"                                                                                           #
+#                                                                                                                                                                                                     #
+#               02) "reverse" ASM migration under load: "DARE: VMAX250FX_02076 => VMAX100K_01755 :non-DARE"                                                                                           #
+#                                                                                                                                                                                                     #
+#          Following shows how ASMLIST "/tmp/orasm" output file may be used verify "Source/Target" Disks (e.g. LUNs) upon completion of "reverse" ("DARE => non-DARE" array) ASM migration.           #
+#          Depending on which single letter options (if any) were used (e.g. "./asmlist"), it may be necessary to adjust positional parm values in post migration parsing syntax:                     #
+#                                                                                                                                                                                                     #
+#                                        ::-($8: <LUN_ID>)-::         ::---------------($4: <ASM_Sts>)--------------::    :::--::-- --($7"_"$9: <Model>_<Array_SN>)                                   #
+#                                        ::                ::         ::                                            ::    ::   ::                                                                     #
+#               lnxdb-svl-23:/tmp $ awk '$8~/^6/ && length($8)==32 && $4!="-" {print "x ASM DISKS with ASM_Status: "$4" ("$7"_"$9")"}' /tmp/orasm  | sort | uniq -c                                   #
+#                   50 x ASM DISKS with ASM_Status: FORMER (VMAX250F_000197802076)                                                                                                                    #
+#                   50 x ASM DISKS with ASM_Status: MEMBER (VMAX100K_000196801755)                                                                                                                    #
+#                                                   ::::::                                                                                                                                            #
+#                                                   ::::::---("FORMER": ASM migration Source Disks)                                                                                                   #
+#                                                   ::::::---("MEMBER": ASM migration Target Disks)                                                                                                   #
+#                                                                                                                                                                                                     #
+#     lnxdb-svl-23:/tmp $ view /tmp/orasm          # {Syntax: "./asmlist", Runtime: 11 seconds}                                                                                                       #
+#                                                                                                                                                                                                     #
+#     Host LUN Summary:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      #_LUNs  Platform       Size   Pathset      #_Paths  Status                                                                                                            #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  1024M  0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  1024M  0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       1  EMC,SYMMETRIX  1.0T   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  16G    0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  16G    0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      15  EMC,SYMMETRIX  272G   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      16  EMC,SYMMETRIX  272G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      62  EMC,SYMMETRIX  545G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23      62  EMC,SYMMETRIX  545G   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       1  EMC,SYMMETRIX  5.6M   0,2             2     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  5.6M   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       6  EMC,SYMMETRIX  5.6M   0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       5  EMC,SYMMETRIX  68G    0,1,2,3         4     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       8  EMC,SYMMETRIX  8.0G   0,1,2,2,3,3     6     active_ready_running                                                                                              #
+#     2018_07-18  lnxdb-svl-23       8  EMC,SYMMETRIX  8.0G   0,1,2,3         4     active_ready_running                                                                                              #
+#                                                                                                                                                                                                     #
+#     Messages:                                                                                                                                                                                       #
+#                                                                                                                                                                                                     #
+#          Warning: "ps -ef | egrep ora_pmon" DB(s): CFNDARE doesn't match kfed "kfdhdb.dskname:" prefix DB(s) CFNDARE,CFNSVL6                                                                        #
+#                                                                                                                                                                                                     #
+#          Warning: ASMLIST has used kfed "kfdhdb.dskname:" prefix DB(s) CFNDARE,CFNSVL6 for performing this audit.                                                                                   #
+#                                                                                                                                                                                                     #
+#          Warning: DB CFNDARE contains 34 ASM Disks not associated with any ASM Disk Groups (single "-" in /tmp/orasm).                                                                              #
+#                                                                                                                                                                                                     #
+#          Warning: DB CFNSVL6 contains 34 ASM Disks not associated with any ASM Disk Groups (single "-" in /tmp/orasm).                                                                              #
+#                                                                                                                                                                                                     #
+#     Oracle ASM DB(s):                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname      OS_Rel    SYMCLI    Ora_DB   #_Grp  #_Shr  Cfg_TiB  Alc_TiB  %_Alc  Usd_TiB  Alc/Usd                                                                                  #
+#     2018_07-18  lnxdb-svl-23  RHEL_7.4  V8.4.0.7  CFNDARE    44     78      33.2      5.0    15       1.1   4.6:1                                                                                   #
+#     2018_07-18  lnxdb-svl-23  RHEL_7.4  V8.4.0.7  CFNSVL6    44     78      33.2      5.3    16       5.3   1.0:1                                                                                   #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disk Groups:                                                                                                                                                                         #
+#                                                                                                                                                                                                     #
+#     ASM_Disk_Group   ASM_Disk_Base  #_Grp   Cfg_MiB   Alc_MiB  %_Alc   Usd_MiB  Alc/Usd                                                                                                             #
+#     DG_CFNSVL6_AR    CFNDARE_AR        4    2230800       174     0         24   7.2:1                                                                                                              #
+#     DG_CFNSVL6_DT01  CFNDARE_DT01      8    4461600   2748945    62     723408   3.8:1                                                                                                              #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02      8    4461600   2445763    55     392911   6.2:1                                                                                                              #
+#     DG_CFNSVL6_FRA   CFNDARE_FRA       8    4461600      3078     0       1297   2.4:1                                                                                                              #
+#     DG_CFNSVL6_RC    CFNDARE_RC        8     131040     10269     8       6845   1.5:1                                                                                                              #
+#     DG_CFNSVL6_RC_M  CFNDARE_RC_M      8     131040      8160     6       5441   1.5:1                                                                                                              #
+#     DG_CFNSVL6_AR    CFNSVL6_AR        4    2230800       185     0        185   1.0:1                                                                                                              #
+#     DG_CFNSVL6_DT01  CFNSVL6_DT01      8    4461600   2756967    62    2756967   1.0:1                                                                                                              #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02      8    4461600   2665283    60    2665283   1.0:1                                                                                                              #
+#     DG_CFNSVL6_FRA   CFNSVL6_FRA       8    4461600     64206     1      64206   1.0:1                                                                                                              #
+#     DG_CFNSVL6_RC    CFNSVL6_RC        8     131040     10306     8      10306   1.0:1                                                                                                              #
+#     DG_CFNSVL6_RC_M  CFNSVL6_RC_M      8     131040      8178     6       8178   1.0:1                                                                                                              #
+#     EMCDARE_CL       EMCDARE_CL_A      4       4096       504    12        341   1.5:1                                                                                                              #
+#     EMCDARE_CL       EMCDARE_CL_B      4       4096       457    11        302   1.5:1                                                                                                              #
+#     EMCDARE_CL       EMCDARE_CL_C      4       4096       419    10        272   1.5:1                                                                                                              #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disks:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     ASM_Disk_Group   ASM_Disk               ASM_Typ   ASM_Sts  Size   Platform   Model     LUN_ID                            Array_SN|OS   Device  Type  Cfg_MiB  Alc_MiB  %_Alc  Usd_MiB  Alc/Usd  #
+#     <...>                                                                                                                                                                                           #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_05   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303531  000197802076  00051   TDEV   557700   298781    54     48980   6.1:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_06   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303339  000197802076  00039   TDEV   557700   306774    55     48694   6.3:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_07   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303446  000197802076  0004F   TDEV   557700   306541    55     49442   6.2:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_08   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303432  000197802076  00042   TDEV   557700   306662    55     49462   6.2:1   #
+#     -                CFNDARE_DT03_545G_01   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303346  000197802076  0003F   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_02   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303333  000197802076  00033   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_03   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303338  000197802076  00038   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_04   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303539  000197802076  00059   TDEV   557700        0     0         0       -   #
+#     <...>                                                                                                                                                                                           #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_05   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303531  000197802076  00051   TDEV   557700   298781    54     48980   6.1:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_06   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303339  000197802076  00039   TDEV   557700   306774    55     48694   6.3:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_07   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303446  000197802076  0004F   TDEV   557700   306541    55     49442   6.2:1   #
+#     DG_CFNSVL6_DT02  CFNDARE_DT02_545G_08   DISKHEAD  FORMER   545G   SYMMETRIX  VMAX250F  60000970000197802076533030303432  000197802076  00042   TDEV   557700   306662    55     49462   6.2:1   #
+#     -                CFNDARE_DT03_545G_01   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303346  000197802076  0003F   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_02   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303333  000197802076  00033   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_03   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303338  000197802076  00038   TDEV   557700        0     0         0       -   #
+#     -                CFNDARE_DT03_545G_04   INVALID   -        545G   SYMMETRIX  VMAX250F  60000970000197802076533030303539  000197802076  00059   TDEV   557700        0     0         0       -   #
+#     <...>                                                                                                                                                                                           #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_04   DISKHEAD  MEMBER   545G   SYMMETRIX  VMAX100K  60000970000196801755533030314642  000196801755  001FB   TDEV   557700   333157    60    333157   1.0:1   #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_05   DISKHEAD  MEMBER   545G   SYMMETRIX  VMAX100K  60000970000196801755533030314633  000196801755  001F3   TDEV   557700   333163    60    333163   1.0:1   #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_06   DISKHEAD  MEMBER   545G   SYMMETRIX  VMAX100K  60000970000196801755533030323234  000196801755  00224   TDEV   557700   333157    60    333157   1.0:1   #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_07   DISKHEAD  MEMBER   545G   SYMMETRIX  VMAX100K  60000970000196801755533030323136  000196801755  00216   TDEV   557700   333159    60    333159   1.0:1   #
+#     DG_CFNSVL6_DT02  CFNSVL6_DT02_545G_08   DISKHEAD  MEMBER   545G   SYMMETRIX  VMAX100K  60000970000196801755533030314646  000196801755  001FF   TDEV   557700   333161    60    333161   1.0:1   #
+#     -                CFNSVL6_DT03_545G_01   INVALID   -        545G   SYMMETRIX  VMAX100K  60000970000196801755533030323233  000196801755  00223   TDEV   557700        2     0         2   1.0:1   #
+#     -                CFNSVL6_DT03_545G_02   INVALID   -        545G   SYMMETRIX  VMAX100K  60000970000196801755533030314634  000196801755  001F4   TDEV   557700        2     0         2   1.0:1   #
+#     -                CFNSVL6_DT03_545G_03   INVALID   -        545G   SYMMETRIX  VMAX100K  60000970000196801755533030314637  000196801755  001F7   TDEV   557700        2     0         2   1.0:1   #
+#     -                CFNSVL6_DT03_545G_04   INVALID   -        545G   SYMMETRIX  VMAX100K  60000970000196801755533030323244  000196801755  0022D   TDEV   557700        2     0         2   1.0:1   #
+#     <...>                                                                                                                                                                                           #
+#     EMCDARE_CL       EMCDARE_CL_C_1G_1      DISKHEAD  FORMER   1024M  SYMMETRIX  VMAX250F  60000970000197802076533030303945  000197802076  0009E   TDEV     1024       83     8         5  16.6:1   #
+#     EMCDARE_CL       EMCDARE_CL_C_1G_2      DISKHEAD  FORMER   1024M  SYMMETRIX  VMAX250F  60000970000197802076533030303946  000197802076  0009F   TDEV     1024       74     7         5  14.8:1   #
+#     EMCDARE_CL       EMCDARE_CL_C_1G_01     DISKHEAD  MEMBER   1024M  SYMMETRIX  VMAX100K  60000970000196801755533030314246  000196801755  001BF   TDEV     1024      132    13       132   1.0:1   #
+#     EMCDARE_CL       EMCDARE_CL_C_1G_02     DISKHEAD  MEMBER   1024M  SYMMETRIX  VMAX100K  60000970000196801755533030314330  000196801755  001C0   TDEV     1024      130    13       130   1.0:1   #
+#                                                                                                                                                                                                     #
+#     Sample 03) "-d" option specified ("decode only": $opt_d = 1,) for "mixed" (EMC & Netapp) SAN platform DR environment.                                                                           #
+#                                                                                                                                                                                                     #
+#          DR RAC is running 3 different DBs provisioned from two distinct block storage platforms.  Example illustrates difference between internal device labels for Netapp & EMC:                  #
+#                                                                                                                                                                                                     #
+#               - Netapp SAN LUN SN (last 12 bytes of LUN ID translated to ASCII: x'3830446a412b4b726d6a4232' => a'80DjA+KrmjB2')                                                                     #
+#                                                                                                                                                                                                     #
+#               - EMC VMAX Symdev   (last  5 bytes of LUN ID translated to ASCII: x'3030303734' => a'00074')                                                                                          #
+#                                                                                                                                                                                                     #
+#         *Notes:  Use Netapp Data OnTap command "...lun show [-v]" to for detailed LUN data & to correlate Netapp LUNs with the cDOT clusters on which they reside.                                  #
+#                  Use EMC SYMCLI command "symdev ... list [-v]" for detailed Symdev data.  VMAX LUN_ID also has full 12 digit array SN d'000196701774' (bytes 5-9).                                  #
+#                                                                                                                                                                                                     #
+#     dbc-dr-2001:/tmp $ view /tmp/orasm          # {Syntax: "./asmlist -cd", Runtime: 15 seconds}                                                                                                    #
+#                                                                                                                                                                                                     #
+#     Host LUN Summary:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname     #_LUNs  Platform          Size  Pathset  #_Paths  Status                                                                                                               #
+#     2018_07-17  dbc-dr-2001       6  C-Mode            1.0G  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001      10  EMC,SYMMETRIX     16G   1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001      26  C-Mode            16G   1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001       2  EMC,SYMMETRIX     272G  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001     141  C-Mode            272G  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001       1  LSI,MRSASRoMB-4i  278G  0           1     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001      32  EMC,SYMMETRIX     545G  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001      31  C-Mode            545G  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001       4  EMC,SYMMETRIX     5.6M  1,2,3,4     4     active_ready_running                                                                                                 #
+#     2018_07-17  dbc-dr-2001       7  C-Mode            68G   1,2,3,4     4     active_ready_running                                                                                                 #
+#                                                                                                                                                                                                     #
+#     Oracle ASM DB(s):                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        Hostname     OS_Rel    SYMCLI    Ora_DB   #_Grp  #_Shr                                                                                                                              #
+#     2018_07-17  dbc-dr-2001  RHEL_6.9  V8.0.1.0  SCAPRD     78     78                                                                                                                               #
+#     2018_07-17  dbc-dr-2001  RHEL_6.9  V8.0.1.0  SDAPRD     77     77                                                                                                                               #
+#     2018_07-17  dbc-dr-2001  RHEL_6.9  V8.0.1.0  SHOPPRD    88     88                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disk Groups:                                                                                                                                                                         #
+#                                                                                                                                                                                                     #
+#     Date        ASM_Disk_Group     ASM_Disk_Base     #_Grp                                                                                                                                          #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_A     2                                                                                                                                           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_B     2                                                                                                                                           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_C     2                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_AR       SCAPRD_AR            4                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_DT01     SCAPRD_DT01         18                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_DT02     SCAPRD_DT02         22                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_DT03     SCAPRD_DT03         10                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_FRA      SCAPRD_FRA          16                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_RC       SCAPRD_RC            4                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_RC_M     SCAPRD_RC_M          4                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_AR       SDAPRD_AR            6                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_DT01     SDAPRD_DT01         16                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_DT02     SDAPRD_DT02         16                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_DT03     SDAPRD_DT03         16                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_DT04     SDAPRD_DT04         11                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_FRA      SDAPRD_FRA           4                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_RC       SDAPRD_RC            4                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_RC_M     SDAPRD_RC_M          4                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_AR      SHOPPRD_AR           6                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_AR           6                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_DT01    SHOPPRD_DT01         8                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT01         8                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_DT02    SHOPPRD_DT02         8                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT02         8                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_DT03    SHOPPRD_DT03         8                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT03         8                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_DT04    SHOPPRD_DT04         2                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT04         2                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_FRA     SHOPPRD_FRA          2                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_FRA          2                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_RC      SHOPPRD_RC           5                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC           5                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M         5                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M         5                                                                                                                                           #
+#                                                                                                                                                                                                     #
+#     Oracle ASM Disks:                                                                                                                                                                               #
+#                                                                                                                                                                                                     #
+#     Date        ASM_Disk_Group     ASM_Disk               ASM_Typ   ASM_Sts  Size  Mpath    LUN_ID                            OUI     Platform       Model     Array_SN|OS   Device                 #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_A_1G_1  DISKHEAD  MEMBER   1.0G  mpathti  600a09803830446a412b4b726d6a4232  00a098  C-Mode         -         cDOT          80DjA+KrmjB2           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_A_1G_2  DISKHEAD  MEMBER   1.0G  mpathrw  600a09803830446a412b4b726d6a4233  00a098  C-Mode         -         cDOT          80DjA+KrmjB3           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_B_1G_1  DISKHEAD  MEMBER   1.0G  mpathwc  600a09803830446a452b4c30512f726f  00a098  C-Mode         -         cDOT          80DjE+L0Q/ro           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_B_1G_2  DISKHEAD  MEMBER   1.0G  mpathth  600a09803830446a31244c30512f7347  00a098  C-Mode         -         cDOT          80Dj1$L0Q/sG           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_C_1G_1  DISKHEAD  MEMBER   1.0G  mpathwg  600a09803830446a412b4b726d6a4234  00a098  C-Mode         -         cDOT          80DjA+KrmjB4           #
+#     2018_07-17  DG_GRID_DR_079_CL  GRID_DR_079_CL_C_1G_2  DISKHEAD  MEMBER   1.0G  mpathtq  600a09803830446a412b4b726d6a4235  00a098  C-Mode         -         cDOT          80DjA+KrmjB5           #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-17  DG_SCAPRD_AR       SCAPRD_AR_272G_03      DISKHEAD  MEMBER   272G  mpathqn  600a09803830446a452b4c30512f726c  00a098  C-Mode         -         cDOT          80DjE+L0Q/rl           #
+#     2018_07-17  DG_SCAPRD_AR       SCAPRD_AR_272G_04      DISKHEAD  MEMBER   272G  mpathra  600a09803830446a31244c30512f7344  00a098  C-Mode         -         cDOT          80Dj1$L0Q/sD           #
+#     2018_07-17  DG_SCAPRD_DT01     SCAPRD_DT01_272G_01    DISKHEAD  MEMBER   272G  mpathtf  600a09803830446a412b4b726d6a4168  00a098  C-Mode         -         cDOT          80DjA+KrmjAh           #
+#     2018_07-17  DG_SCAPRD_DT01     SCAPRD_DT01_272G_02    DISKHEAD  MEMBER   272G  mpathrj  600a09803830446a483f4c3051614a64  00a098  C-Mode         -         cDOT          80DjH?L0QaJd           #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-17  DG_SDAPRD_AR       SDAPRD_AR_272G_05      DISKHEAD  MEMBER   272G  mpathqo  600a09803830446a412b4b726d6a4344  00a098  C-Mode         -         cDOT          80DjA+KrmjCD           #
+#     2018_07-17  DG_SDAPRD_AR       SDAPRD_AR_272G_06      DISKHEAD  MEMBER   272G  mpathvs  600a09803830446a483f4c3051614b79  00a098  C-Mode         -         cDOT          80DjH?L0QaKy           #
+#     2018_07-17  DG_SDAPRD_DT01     SDAPRD_DT01_272G_01    DISKHEAD  MEMBER   272G  mpathwo  600a09803830446a412b4b726d6a4278  00a098  C-Mode         -         cDOT          80DjA+KrmjBx           #
+#     2018_07-17  DG_SDAPRD_DT01     SDAPRD_DT01_272G_02    DISKHEAD  MEMBER   272G  mpathuv  600a09803830446a483f4c3051614b68  00a098  C-Mode         -         cDOT          80DjH?L0QaKh           #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_DT01    SHOPPRD_DT01_544G_001  DISKHEAD  MEMBER   545G  mpathjb  60000970000196701774533030303734  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00074                  #
+#     2018_07-17  DG_SHOPPRD_DT01    SHOPPRD_DT01_544G_002  DISKHEAD  MEMBER   545G  mpathjj  60000970000196701774533030303735  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00075                  #
+#     2018_07-17  DG_SHOPPRD_DT01    SHOPPRD_DT01_544G_003  DISKHEAD  MEMBER   545G  mpathij  60000970000196701774533030303736  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00076                  #
+#     2018_07-17  DG_SHOPPRD_DT01    SHOPPRD_DT01_544G_004  DISKHEAD  MEMBER   545G  mpathqb  60000970000196701774533030303737  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00077                  #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT01_544G_01   DISKHEAD  FORMER   545G  mpathxr  600a09803830446a412b4b726d6a474d  00a098  C-Mode         -         cDOT          80DjA+KrmjGM           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT01_544G_02   DISKHEAD  FORMER   545G  mpathyf  600a09803830446a483f4c3051614e56  00a098  C-Mode         -         cDOT          80DjH?L0QaNV           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT01_544G_03   DISKHEAD  FORMER   545G  mpathxc  600a09803830446a452b4c30512f7662  00a098  C-Mode         -         cDOT          80DjE+L0Q/vb           #
+#     2018_07-17  DUMMY1             SHOPPRD_DT01_544G_04   DISKHEAD  FORMER   545G  mpathxa  600a09803830446a31244c30512f7670  00a098  C-Mode         -         cDOT          80Dj1$L0Q/vp           #
+#     <...>                                                                                                                                                                                           #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M_16G_001   DISKHEAD  MEMBER   16G   mpathiy  60000970000196701774533030303939  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00099                  #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M_16G_002   DISKHEAD  MEMBER   16G   mpathit  60000970000196701774533030303936  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00096                  #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M_16G_003   DISKHEAD  MEMBER   16G   mpathkb  60000970000196701774533030303935  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00095                  #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M_16G_004   DISKHEAD  MEMBER   16G   mpathja  60000970000196701774533030303938  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00098                  #
+#     2018_07-17  DG_SHOPPRD_RC_M    SHOPPRD_RC_M_16G_005   DISKHEAD  MEMBER   16G   mpathje  60000970000196701774533030303937  000097  EMC,SYMMETRIX  VMAX200K  000196701774  00097                  #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M_16G_01    DISKHEAD  FORMER   16G   mpathyh  600a09803830446a483f4c3051614e66  00a098  C-Mode         -         cDOT          80DjH?L0QaNf           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M_16G_02    DISKHEAD  FORMER   16G   mpathwz  600a09803830446a452b4c30512f766a  00a098  C-Mode         -         cDOT          80DjE+L0Q/vj           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M_16G_03    DISKHEAD  FORMER   16G   mpathwx  600a09803830446a31244c30512f7678  00a098  C-Mode         -         cDOT          80Dj1$L0Q/vx           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M_16G_04    DISKHEAD  FORMER   16G   mpathxz  600a09803830446a412b4b726d6a4759  00a098  C-Mode         -         cDOT          80DjA+KrmjGY           #
+#     2018_07-17  DUMMY1             SHOPPRD_RC_M_16G_05    DISKHEAD  FORMER   16G   mpathyn  600a09803830446a483f4c3051614e67  00a098  C-Mode         -         cDOT          80DjH?L0QaNg           #
+#                                                                                                                                                                                                     #
+#     Fields:                                                                                                                                                                                         #
+#                                                                                                                                                                                                     #
+#            #_Grp: Number of shared Oracle ASM Disks for a Disk label prefix (ex: "CFNSVL6_") with an ASM Disk Group (ex: kfed read ... "kfdhdb.grpname: DG_CFNSVL6_DT01").                          #
+#            #_Shr: Number of shared Oracle ASM Disks for a Disk label prefix (ex: "CFNSVL6_") returned by "oracleasm listdisks" (warning issued for any Disks without Groups).                       #
+#             Type: Internal array device type (ex, "TDEV": VMAX local Thin DEVice, "RDF[1|2]+TDEV": VMAX SRDF [source|target] Thin DEVice, "-" if device type unknown).                              #
+#          Cfg_MiB: Configured size of LUN at creation, visible capacity of LUN provisioned to client.                                                                                                #
+#          Alc_MiB: Net capacity of a LUN's configured size that has received write requests from the client.                                                                                         #
+#            %_Alc: "%_(Alc_MiB/Cfg_MiB)" is the net allocated percentage of a LUN's configured capacity receiving client write requests managed in cache by the array.                               #
+#          Usd_MiB: Actual amount of formatted capacity written to array's backend pool on LUN's behalf after optimization (ex: compaction, compression, deduplication, ...).                         #
+#          Alc/Usd: Ratio of "%_Alc/Usd_MiB", indication of how efficient array optimization techniques are relative to the type of workload using a set pf LUNs.                                     #
+#                                                                                                                                                                                                     #
+#    *Notes: For multi node Oracle RACs, ASM Disks present in "$orasm" audit file are shared across all nodes in the RAC.                                                                             #
+#            Certain fields may be set to "-" for unsupported SYMCLI versions or for unrecognized block storage arrays.                                                                               #
+#                                                                                                                                                                                                     #
+#######################################################################################################################################################################################################
+
+dup_nul () {
+
+# Syntax: dup_nul "<input_file>" "<output_file>"                                                           # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: generic user function to strip out consecutive "zero field" records (ex: "^$" null lines) from text "<input_file>", output appended to text <output_file>.
+
+# Code:
+
+     # Remove excess consecutive null records:
+
+          $awk 'NR == 1{nf_prev=NF;print $0};NR > 1{if (!(nf_prev==0 && NF==0)) {print $0};nf_prev=NF}' $1 >> $2
+
+}
+
+adt_env () {
+
+# Syntax: adt_env
+
+# Description: Initialize ASMLIST environment.
+
+# Code:
+
+     # Initialize Environment:
+
+          date="$(date '+%Y_%m-%d')"                                                                       # {Capture date, sample format: 2018_01-05}
+          host="$(hostname)"                                                                               # {Capture hostname}
+
+          tmp=/tmp/asmtmp                                                                                  # {Base for utility temporary ("$tmp") files}
+
+          cmp=${tmp}_cmp                                                                                   # {Base for utility compare ("${cmp}_...") files}
+
+          blkid=${tmp}_blkid                                                                               # {Base for various "blkid" command related files ("${blkid}_[raw|fmt<#>]")}
+          multi=${tmp}_multi-ll                                                                            # {Base for various "multipath -ll" command related files ("${multi}_[raw|fmt<#>]"}
+          db_base=${tmp}_db_base                                                                           # {Host DB list, kfed "kfdhdb.dskname:" prefix (ex: "WIILPRD" of "WIILPRD_DT01_544G_001")}
+          db_inst=${tmp}_db_inst                                                                           # {CSV host DB instance(s) list file (ex: "WIILPRD1,FNTR3PRD1" on RAC node 1)}
+          db_pmon=${tmp}_db_pmon                                                                           # {Host DB list, "ps -ef | egrep ora_pmon ..." (ex: "WIILPRD" of "WIILPRD1")}
+          bnd_raw=${tmp}_bnd_raw                                                                           # {Default file for EMC VMAX "symcfg ... -bound" data if collected on RAC node}
+          dev_raw=${tmp}_dev_raw                                                                           # {Default file for EMC VMAX "symdev ... list"   data if collected on RAC node}
+
+          srch=${tmp}_srch                                                                                 # {Base for various search files}
+          srch_mpath=${srch}_mpath                                                                         # {"mpath" search file to correlate "blkid" ASM Disks with "multipath -ll" LUNIDs}
+          srch_sn_vmax=${srch}_sn_vmax                                                                     # {EMC VMAX "<SN>" search file (sample entry: "<000...>" full 12 digit SN)}
+          srch_sn_dev_vmax=${srch}_sn_dev_vmax                                                             # {EMC VMAX "<SN>_<Symdev>" search file (sample entry: "<000...>_<Symdev>"}
+
+          merge=${tmp}_merge                                                                               # {Base for various "${merge}_fmt<#>" cojoin related files}
+          paths=/tmp/lun_paths_${host}                                                                     # {Capture "LUN/Path" data file for all LUNs provisioned to host}
+          orasm=/tmp/orasm                                                                                 # {Capture final Oracle ASM formatted output file}
+
+          pat_date="[0-9][0-9][0-9][0-9]_[0-9][0-9]-[0-9][0-9]"                                            # {$pat_date:     match "yyyy_mm-dd" (ex: "2018_04-24") date format}
+          pat_x06="[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]"               # {$pat_x06:       6 consecutive hex characters ( 3 bytes,   case insensitive)}
+          pat_x25="[[:xdigit:]]${pat_x06}${pat_x06}${pat_x06}${pat_x06}"                                   # {$pat_x25:      25 consecutive hex characters (25 nibbles, case insensitive)}
+          pat_lun_7mde="60a9800${pat_x25}"                                                                 # {$pat_lun_7mde: 16 byte Netapp LUN_ID (x'60a9800...',  case insensitive)}
+          pat_lun_cdot="600a098${pat_x25}"                                                                 # {$pat_lun_cdot: 16 byte Netapp LUN_ID (x'600a098...',  case insensitive)}
+          pat_lun_vmax="6000097${pat_x25}"                                                                 # {$pat_lun_vmax: 16 byte VMAX   LUN_ID (x'6000097...',  case insensitive)}
+          pat_sn_vmax="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"                                   # {$pat_sn_vmax pattern: full 12 digit VMAX serial number (d'000...')}
+          pat_symdev="[0-9ABCDEF][0-9ABCDEF][0-9ABCDEF][0-9ABCDEF][0-9ABCDEF]"                             # {$pat_symdev pattern: VMAX Symdev (5 hex characters, upper case)}
+
+          awk=awk;if [[ $(uname) = SunOS ]];then awk=nawk;fi                                               # {non-Sun (ex: RHEL, HP/UX): set "awk", Sun: set "nawk" (new awk)}
+
+          id=$(id | $awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')               # {Determine user id ("root" versus "non-root").}
+          if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                            # {Set $sudo based on $id (root: sudo=""; non-root: sudo="sudo").}
+
+          os_rel="-"                                                                                       # {Capture Host OS release}
+          if [[ -s /etc/redhat-release ]];then
+               os_rel=$($awk '/^Red/{print "RHEL_"$(NF-1)}' /etc/redhat-release)
+          fi
+
+          symcli_ver="-"                                                                                   # Initialize EMC Solutions Enabler (aka SYMCLI) version to "-"
+
+          if [[ -d /usr/symcli/bin ]];then                                                                 # If SYMCLI present, export path (/usr/symcli/bin) & capture version
+               export PATH=$PATH:/usr/symcli/bin
+               symcli_ver=$(symcli | $awk '$5~/SYMCLI/{version=$7;print version}')
+          fi
+
+          $sudo rm -rf ${tmp}_* $orasm         2>/dev/null                                                 # {Remove all files (temporary & output) from previous run}
+
+          touch ${tmp}_fields                  2>/dev/null                                                 # {Initialize CLI fields    file (store KSH "$*" system variable transposed)}
+          touch ${tmp}_options                 2>/dev/null                                                 # {Initialize CLI options   file (store "-[a-z]" single letter options)}
+          touch ${tmp}_parms                   2>/dev/null                                                 # {Initialize CLI parms     file (store "<parm>=<value>") parms}
+          touch ${tmp}_parms_fmt               2>/dev/null                                                 # {Initialize CLI parms_fmt file (store "<parm>=<value>") parms (formatted)}
+
+          touch ${blkid}_raw                   2>/dev/null                                                 # {Initialize raw "blkid" command file}
+          touch ${multi}_raw                   2>/dev/null                                                 # {Initialize raw RHEL native multipathing "multipath -ll" command file}
+          touch $bnd_raw                       2>/dev/null                                                 # {Initialize raw EMC VMAX "symcfg ... -bound" command file if collected on RAC node}
+          touch $dev_raw                       2>/dev/null                                                 # {Initialize raw EMC VMAX "symdev ... list"   command file if collected on RAC node}
+
+          touch ${cmp}_disks_asm               2>/dev/null                                                 # {Initialize shared ASM Disk "compare" file (uniquely sorted "oracleasm listdisks")}
+          touch ${cmp}_disks_blk               2>/dev/null                                                 # {Initialize shared ASM Disk "compare" file (uniquely sorted "blkid /dev/mapper oracleasm")}
+          touch ${cmp}_mpath_blkid             2>/dev/null                                                 # {Initialize "blkid"    mpath partition label capture file (ex: mpatham1:)}
+          touch ${cmp}_mpath_multi-ll          2>/dev/null                                                 # {Initialize "multi-ll" mpath LUN       label capture file (ex: mpatham)}
+          touch ${cmp}_mpath_blkid_multi-ll    2>/dev/null                                                 # {Initialize "blkid/multi-ll" mpath "partition/LUN" cojoin input file}
+
+          touch $db_base                       2>/dev/null                                                 # {Initialize host Oracle DB file (kfed "kfdhdb.dskname:" prefix)}
+          touch $db_inst                       2>/dev/null                                                 # {Initialize host Oracle DB instance file ("ps -ef | egrep ora_pmon ...")}
+          touch $db_pmon                       2>/dev/null                                                 # {Initialize host Oracle DB file ("ps -ef | egrep ora_pmon ...")}
+          touch ${blkid}_fmt1                  2>/dev/null                                                 # {Initialize "blkid" command format "fmt1" file}
+          touch ${srch}_mpath                  2>/dev/null                                                 # {Initialize "mpath" search file (src: ${blkid}_raw, tgt: ${multi}_raw)}
+          touch ${srch}_sn_vmax                2>/dev/null                                                 # {Initialize VMAX "<SN>" search file }
+          touch ${srch}_sn_dev_vmax            2>/dev/null                                                 # {Initialize VMAX "<SN>_<Symdev>" search file }
+          touch ${srch}_asm_dup                2>/dev/null                                                 # {Initialize duplicate ASM disk search file}
+
+          touch ${multi}_fmt1                  2>/dev/null                                                 # {Initialize RHEL native "multipath -ll" command format "fmt1" file}
+          touch ${merge}_fmt1                  2>/dev/null                                                 # {Initialize "blkid/multipath -ll" "fmt1" staging file}
+          touch ${merge}_fmt2                  2>/dev/null                                                 # {Initialize "blkid/multipath -ll" "fmt2" cojoin file}
+          touch ${merge}_fmt2_decode_netapp    2>/dev/null                                                 # {Initialize Netapp LUNID decode file}
+          touch ${merge}_fmt2_decode_vmax      2>/dev/null                                                 # {Initialize EMC VMAX LUNID decode file}
+          touch ${merge}_fmt2_decode_asc       2>/dev/null                                                 # {Initialize merged "EMC VMAX/Netapp" "_asc" decode file (default: ASCII)}
+          touch ${merge}_fmt2_decode           2>/dev/null                                                 # {Initialize merged "EMC VMAX/Netapp" decode file ("$opt_x - 0: ASCII, 1: Hex)}
+          touch ${merge}_fmt2_lunid            2>/dev/null                                                 # {Initialize LUNID format "fmt2" cojoin input file}
+          touch ${merge}_fmt3                  2>/dev/null                                                 # {Initialize merged "decode/LUNID" format "fmt3" file}
+          touch ${merge}_fmt4_bnd              2>/dev/null                                                 # {Initialize VMAX "Bound"        "fmt4" cojoin input  file}
+          touch ${merge}_fmt4_typ              2>/dev/null                                                 # {Initialize VMAX "Type"         "fmt4" cojoin input  file}
+          touch ${merge}_fmt4_typ_bnd          2>/dev/null                                                 # {Initialize VMAX "Type/Bound"   "fmt4" cojoin output file}
+          touch ${merge}_fmt4_dec              2>/dev/null                                                 # {Initialize ASM LUNID "decode"  "fmt4" cojoin input  file}
+          touch ${merge}_fmt4_dec_d            2>/dev/null                                                 # {Initialize ASM LUNID "decode_only"  "fmt4" cojoin output file}
+          touch ${merge}_fmt4_dec_bnd          2>/dev/null                                                 # {Initialize ASM LUNID "decode/bound" "fmt4" cojoin output file}
+          touch ${merge}_fmt4_dec_d_dskasm     2>/dev/null                                                 # {Initialize ASM LUNID "decode_only"  "fmt4" ASM Disk "dskasm" sort file}
+          touch ${merge}_fmt4_dec_bnd_dskasm   2>/dev/null                                                 # {Initialize ASM LUNID "decode/bound" "fmt4" ASM Disk "dskasm" sort file}
+          touch ${merge}_fmt4_asm_vld          2>/dev/null                                                 # {Initialize "asm_valid" LUN cojoin input file (format: "asm_valid ...")}
+          touch ${merge}_fmt4_asm_dup          2>/dev/null                                                 # {Initialize "duplicate" LUN cojoin input file (format: "duplicate ...")}
+          touch ${merge}_fmt4_asmgrp           2>/dev/null                                                 # {Initialize ASM "asmgrp" cojoin input file (data source: "... asmcmd iostat ...")}
+          touch ${merge}_fmt4_dskasm           2>/dev/null                                                 # {Initialize ASM "dskasm" cojoin input file (data source: "${merge}_orasm_det")}
+          touch ${merge}_dev_mapper            2>/dev/null                                                 # {Initialize "ls -l /dev/mapper" cojoin input file (identify duplicate LUN "<mpath>s")}
+          touch ${merge}_lun_det               2>/dev/null                                                 # {Initialize host "LUN/Path" details file created by "adt_lun ()"}
+          touch ${merge}_lun_sum               2>/dev/null                                                 # {Initialize host "LUN/Path" summary file created by "adt_lun ()"}
+
+          touch ${merge}_orasm_sum             2>/dev/null                                                 # {Initialize $orasm "summary" file (stage summary ASM DB overview)}
+          touch ${merge}_orasm_det             2>/dev/null                                                 # {Initialize $orasm "details" file (stage detailed ASM Disk LUN data)}
+          touch ${merge}_orasm_grp_stg         2>/dev/null                                                 # {Initialize $orasm ASM "Grp <=> Dsk" pre stage input file}
+          touch ${merge}_orasm_grp             2>/dev/null                                                 # {Initialize $orasm "disk_group" file (stage detailed ASM Disk Group data)}
+          touch ${merge}_orasm_res_stg         2>/dev/null                                                 # {Initialize $orasm "resolve" pre stage input file (ASM querydisk "valid" LUN table)}
+          touch ${merge}_orasm_res             2>/dev/null                                                 # {Initialize $orasm "resolve" file (stage ASM querydisk "valid" LUN table)}
+          touch ${merge}_orasm_stg_host        2>/dev/null                                                 # {Initialize $orasm "staging" file (stage "/tmp/orasm_[sum|res|det] content: "hostname")
+          touch ${merge}_orasm_stg1            2>/dev/null                                                 # {Initialize $orasm "stage_1" file (stage "/tmp/orasm_[sum|res|det] content)
+          touch ${merge}_orasm_stg2            2>/dev/null                                                 # {Initialize $orasm "stage_2" file (stage "/tmp/orasm_[sum|res|det] content)
+          touch $paths                         2>/dev/null                                                 # {Initialize "LUN/Path" data file for all LUNs provisioned to host}
+          touch $orasm                         2>/dev/null                                                 # {Initialize final host Oracle ASM audit file}
+
+}
+
+adt_cli () {
+
+# Syntax: adt_cli "$fields"                                                                                # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: capture command line options & fields
+
+# Code:
+
+     # Capture "fields", "options" & "parms" specified on CLI:
+
+          for field in $(echo $1); do echo $field; done >> ${tmp}_fields
+
+          egrep "^-" ${tmp}_fields                      >> ${tmp}_options
+
+          egrep -v "^-" ${tmp}_fields                   >> ${tmp}_parms
+
+          if [[ -s ${tmp}_parms ]];then
+
+               $awk 'BEGIN {ct_eq=0}
+                     $1~/=/{++ct_eq;if (ct_eq == 1) {printf("%s",$1)} else {printf("\n%s",$1)}}
+                    $1!~/=/{printf(" %s",$1)}
+                       END {print ""}' ${tmp}_parms     >> ${tmp}_parms_fmt
+
+          fi
+
+     # Set options (0: option not set, 1: option set):
+
+          opt_c=0                                                                                          # {set "-c" ("clock", <Date> prefix for all data)      to false (0: default)}
+          opt_d=0                                                                                          # {set "-d" ("decode only", no backend LUN data)       to false (0: default)}
+          opt_h=0                                                                                          # {set "-h" ("hostname", in ASM "Disk Groups/Disks")   to false (0: default)}
+          opt_t=0                                                                                          # {set "-t" (temporary: preserve $tmp_... work files)  to false (0: default)}
+          opt_x=0                                                                                          # {set "-x" (recognized internal array devices in hex) to false (0: default)}
+
+          if egrep "c" ${tmp}_options > /dev/null;then opt_c=1;fi                                          # {set "-c" ("clock", <Date> prefix for all data)      to true  (1: CLI)}
+          if egrep "d" ${tmp}_options > /dev/null;then opt_d=1;fi                                          # {set "-d" ("decode only", no backend LUN data)       to true  (1: CLI)}
+          if egrep "h" ${tmp}_options > /dev/null;then opt_h=1;fi                                          # {set "-h" ("hostname", in ASM "Disk Groups/Disks")   to true  (1: CLI)}
+          if egrep "t" ${tmp}_options > /dev/null;then opt_t=1;fi                                          # {set "-t" (temporary: preserve $tmp_... work files)  to true  (1: CLI)}
+          if egrep "x" ${tmp}_options > /dev/null;then opt_x=1;fi                                          # {set "-x" (recognized internal array devices in hex) to true  (1: CLI)}
+
+          options=$(sort -u ${tmp}_options | tr '\n' ' ')                                                  # {capture options specified on the command line}
+
+     # Set optional parm variables (format: <parm_var>=<parm_value>):
+
+          bnd=""                                                                                           # {initialize $bnd to null}
+          dev=""                                                                                           # {initialize $dev to null}
+
+     # "check/set" optional parm override values:
+
+          if egrep "^bnd=" ${tmp}_parms_fmt > /dev/null;then bnd="$($awk '/^bnd=/{print substr($0,index($0,"bnd=")+4)}' ${tmp}_parms_fmt)";fi     # {If CLI "bnd=/tmp/<bound_file>",  set $bnd}
+          if egrep "^dev=" ${tmp}_parms_fmt > /dev/null;then dev="$($awk '/^dev=/{print substr($0,index($0,"dev=")+4)}' ${tmp}_parms_fmt)";fi     # {If CLI "dev=/tmp/<device_file>", set $dev}
+
+}
+
+adt_cmd () {
+
+# Syntax: adt_cmd "$cmd" "$out" "$log"                                                                     # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: process Solutions Enabler commands (add "Cmd/RC/Std_Err" data to $history file).
+
+# Code:
+
+     # Process command run by utility:
+
+          $sudo $1 > $2 2>&1;rc=$?
+          print "\n     RC: $rc   Cmd: $1"                                       >> $3
+
+          if [[ $rc -ne 0 && -s $2 ]];then $awk '{printf("%12s %s\n",FS,$0)}' $2 >> $3;fi
+
+}
+
+adt_ext () {
+
+# Syntax: adt_ext "$rc" "$log" "$history"                                                                  # {"<parm>" (enclose parm(s) in double quotes)}
+
+# Description: Check $rc for most recently run command.  If $rc non-zero, issue error msg & exit.
+
+# Code:
+
+     # Process return codes returned by commands run by "adt_cmd"
+
+          if   [[ $1 -ne 0 ]];then                                                                         # {Check command return code.  If non-zero $rc, issue error msg & exit.}
+               print "\nReliable audit requires accurate command output."         >> $2
+               print "\nWork with vendor to resolve issue and then retry audit."  >> $2
+               print "\nSee $3 for details."                                      >> $2
+               print "\nEnd Timestamp: $(date '+%Y-%m-%d_%H:%M:%S_%Z')\n"         >> $2
+               dup_nul "$2" "$3"
+               cat $3
+               exit $1
+          fi
+
+}
+
+adt_cmn () {
+
+# Syntax: adt_cmn
+
+# Description: "capture/format" ASMLIST common commands ("blkid", "multipath -ll") & if applicable, array specific commands
+
+# Code:
+
+     # Issue Starting message:
+
+          echo "Starting Audit for Shared Oracle ASM Disk data for host $host" | $awk '{print "\n"$0}'
+
+     # Capture raw "blkid" command data:                                                                   # {$blkid (${tmp}_blkid_raw)}
+
+          $sudo blkid > ${blkid}_raw
+
+     # Capture raw RHEL native multipathing "multipath -ll" command data                                   # {$multi (${tmp}_multi-ll_raw)}
+
+          $sudo multipath -ll > ${multi}_raw
+
+     # Capture active Oracle DB instances running on host                                                  # {$db_inst (${tmp}_db_inst)}
+
+          ps -ef |\
+          $awk '$NF~/pmon/ && $NM !~/+ASM/{
+                                           if (dbs=="") {dbs=$NF}
+                                           else         {dbs=dbs","$NF}
+                                          }
+                                      END {
+                                           gsub(/ora_pmon_/,"",dbs)
+                                           print dbs
+                                          }
+               ' > $db_inst
+
+
+
+     # Capture active Oracle DB(s) running on host (derived from "$db_inst")
+
+          $awk '{
+                 num_elem=split($1,ary_inst,",")
+                 for (i=1; i<=num_elem; i++) {
+                                              db=substr(ary_inst[i],1,length(ary_inst[i])-1)
+                                              print db
+                                             }
+                }
+               ' $db_inst | sort -u > $db_pmon
+
+     # Create "mpath" search file excerpt to correlate "${blkid}_raw, ${multi}_raw":                       # {${srch}_mpath (${tmp}_srch_mpath): sample "${srch}_mpath" entry: "^mpathbd[ ]"}
+
+          #     ${cmp}_mpath_blkid                                                                         # {"blkid"    mpath partition label capture file (ex: mpatham1:)}
+          #     ${cmp}_mpath_multi-ll                                                                      # {"multi-ll" mpath LUN       label capture file (ex: mpatham)}
+          #     ${cmp}_mpath_blkid_multi-ll                                                                # {"blkid/multi-ll" mpath "partition/LUN" cojoin input file}
+
+          #     Sample "multi-ll/blkid" mpath pairs
+          #
+          #     $ view ${cmp}_mpath_blkid_multi-ll
+          #     <...>
+          #     mpathbd     multi     <--- pair1 ("multi-ll": native multipath LUN mpath entry)
+          #     mpathbd1:   blkid     <--- pair1 ("blkid":    Oracle  ASM Disk partition entry)
+          #     mpathbe     multi
+          #     mpathbf     multi
+          #     mpathbg     multi     <--- pair2 ("multi-ll": native multipath LUN mpath entry)
+          #     mpathbg1:   blkid     <--- pair2 ("blkid":    Oracle  ASM Disk partition entry)
+          #     mpathbh     multi     <--- pair3 ("multi-ll": native multipath LUN mpath entry)
+          #     mpathbh1:   blkid     <--- pair3 ("blkid":    Oracle  ASM Disk partition entry)
+          #     <...>
+
+          $awk '$1~/mapper/ && $NF~/oracleasm/ {print substr($1,13),"blkid"}' ${blkid}_raw | column -t | sort -u > ${cmp}_mpath_blkid
+
+          $awk '$1~/^mpath/ {print $1,"multi"}' ${multi}_raw | column -t | sort -u                               > ${cmp}_mpath_multi-ll
+
+          sort -k1,1 ${cmp}_mpath_blkid ${cmp}_mpath_multi-ll | column -t                                        > ${cmp}_mpath_blkid_multi-ll
+
+          $awk '$2=="multi" {mpath_m=sprintf("%s",$1)}
+                $2=="blkid" {
+                             mpath_b=sprintf("%s",$1)
+                             mpath_lun_srch="s^-[ ]"
+                             if (mpath_b~mpath_m) {mpath_lun_srch="^"mpath_m"[ ]"}
+                             print mpath_lun_srch
+                            }
+               ' ${cmp}_mpath_blkid_multi-ll | sort -k1,1 > ${srch}_mpath
+
+     # Format raw RHEL "blkid" command data:
+
+          #     /dev/mapper/mpaths1: LABEL="PRPT_DT02_544G_003" TYPE="oracleasm"                           # {sample "${blkid}_fmt1" entry: "mpaths1:  blkid  PRPT_DT02_544G_003"}
+
+          $awk '$1~/mapper/ && $NF~/oracleasm/ {
+                                                mpath_part=substr($1,13)
+                                                asm_disk=substr($2,8,length($2)-8)
+                                                print mpath_part" blkid "asm_disk
+                                               }
+               ' ${blkid}_raw | column -t | sort -k1,1 > ${blkid}_fmt1
+
+     # Format raw RHEL native "multipath -ll" command data:                                                # {${multi}_fmt1 (${tmp}_multi-ll_fmt1)}
+
+          $awk   '$3~/dm-/ {
+                            mpath=$1
+                            lunid=substr($2,3,32)
+
+                            model="-"
+
+                            oui=substr(lunid,2,6)
+                            if (oui~/^000097$/) {
+                                                 model_en=substr(lunid,14,2)
+                                                 if (model_en~/^68$/) {model="VMAX100K"}
+                                                 if (model_en~/^67$/) {model="VMAX200K"}
+                                                 if (model_en~/^72$/) {model="VMAX400K"}
+                                                 if (model_en~/^78$/) {model="VMAX250F"}
+                                                 if (model_en~/^70$/) {model="VMAX450F"}
+                                                 if (model_en~/^75$/) {model="VMAX850F"}
+                                                 if (model_en~/^77$/) {model="VMAX950F"}
+                                                }
+                            sub(/^,/,"",$NF)
+                            type=$NF
+                           }
+                $1~/size=/ {
+                            size=substr($1,6)
+                            print mpath,"multi",size,type,model,lunid
+                           }
+                 ' ${multi}_raw | egrep -f ${srch}_mpath | column -t > ${multi}_fmt1
+
+     # Stage formatted (..._fmt1) "blkid" and "multipath -ll" data:                                        # {${merge}_fmt1 (${tmp}_merge_fmt1)}
+
+          sort -k1,1 ${blkid}_fmt1 ${multi}_fmt1 | column -t > ${merge}_fmt1
+
+     # Cojoin formatted (..._fmt1) "blkid" and "multipath -ll" data:                                       # {${merge}_fmt2 (${tmp}_merge_fmt1)}
+
+          #     ${merge}_fmt1_tst:
+          #
+          #     mpathaa     multi  545G                  ,SYMMETRIX  VMAX100K  60000970000196800557533030343538
+          #     mpathaa1:   blkid  PRPT_DT02_544G_013
+          #     mpathab     multi  545G                  ,SYMMETRIX  VMAX100K  60000970000196800557533030343541
+          #     mpathabp1:  blkid  PRPT_DT03_544G_005
+          #     mpathac     multi  545G                  ,SYMMETRIX  VMAX100K  60000970000196800557533030343543
+          #     mpathac1:   blkid  PRPT_DT01_544G_009
+          #     mpathad     multi  545G                  ,SYMMETRIX  VMAX100K  60000970000196800557533030343341
+          #     mpathadp1:  blkid  PRPT_DT01_544G_013
+
+          #     sjdbpr706a.corp.webex.com:/tmp $ egrep "PRPT_DT02_544G_013|PRPT_DT03_544G_005|PRPT_DT01_544G_009|PRPT_DT01_544G_013" asmtmp_merge_fmt2
+          #     PRPT_DT01_544G_009    545G   mpathac  ,SYMMETRIX  VMAX100K  60000970000196800557533030343543
+          #     PRPT_DT01_544G_013    545G   mpathad  ,SYMMETRIX  VMAX100K  60000970000196800557533030343341
+          #     PRPT_DT02_544G_013    545G   mpathaa  ,SYMMETRIX  VMAX100K  60000970000196800557533030343538
+          #     PRPT_DT03_544G_005    545G   mpathab  ,SYMMETRIX  VMAX100K  60000970000196800557533030343541
+
+          $awk '$2=="multi" {
+                             mpath_m=sprintf("%s",$1)
+                             size_m=$3
+                             type_m=$4
+                             model_m=$5
+                             lunid_m=$6
+                            }
+                $2=="blkid" {
+                             mpath_b=sprintf("%s",$1)
+                             asmdisk_b=$3
+                             asmdisk=asmdisk_b;size="-";mpath="-";type="-";model="-";lunid="-"
+                             if (mpath_b~mpath_m) {size=size_m;mpath=mpath_m;type=type_m;model=model_m;lunid=lunid_m}
+                             print asmdisk,size,mpath,type,model,lunid
+                            }
+
+               ' ${merge}_fmt1 | column -t | sort -u > ${merge}_fmt2
+
+     # Create Netapp LUNID decode file ("7-Mode/cDOT" OUIs: "0a9800/00a098"):                             # {${merge}_fmt2_decode_netapp (${tmp}_merge_fmt2_decode_netapp)}
+
+          $awk '$0~pat_lun_7mde||$0~pat_lun_cdot{
+                                                 ontap="7Mode"
+                                                 pat_lun_match=pat_lun_7mde
+                                                 if ($0~pat_lun_cdot) {ontap="cDOT";pat_lun_match=pat_lun_cdot}
+                                                 pos_id=match($0,pat_lun_match)
+                                                 id=substr($0,pos_id,32)
+                                                 dev_x=substr($0,pos_id+8,24)
+                                                 dev_a=""
+                                                 for (i=1; i<length(dev_x); i+=2) {dev_a=dev_a""sprintf("%c",strtonum("0x"substr(dev_x,i,2)))}
+                                                 printf("%-36s %-9s %s\n",id,ontap,dev_a)}
+               ' pat_lun_7mde="$pat_lun_7mde" pat_lun_cdot="$pat_lun_cdot" ${merge}_fmt2 |\
+          $awk '{print $1,"decode",$2,$3}' | column -t | sort -u > ${merge}_fmt2_decode_netapp
+
+     # Create EMC VMAX LUNID decode file (VMAX OUI: "000097"):                                           # {${merge}_fmt2_decode_vmax (${tmp}_merge_fmt2_decode_vmax)}
+
+          $awk '$0~pat_lun_vmax{
+                                pos_id=match($0,pat_lun_vmax)
+                                id=substr($0,pos_id,32)
+                                sn=substr($0,pos_id+8,12)
+                                dev_x=substr($0,pos_id+22,10)
+                                dev_a=""
+                                for (i=1; i<length(dev_x); i+=2) {dev_a=dev_a""sprintf("%c",strtonum("0x"substr(dev_x,i,2)))}
+                                printf("%-36s %-16s %s\n",id,sn,dev_a)
+                               }
+               ' pat_lun_vmax="$pat_lun_vmax" ${merge}_fmt2 |\
+          $awk '{print $1,"decode",$2,$3}' | column -t | sort -u > ${merge}_fmt2_decode_vmax
+
+     # Merge "EMC VMAX/Netapp" LUN_ID decode files:                                                      # {${merge}_fmt2_decode (${tmp}_merge_fmt2_decode)}
+
+          sort -k1,1 ${merge}_fmt2_decode_netapp ${merge}_fmt2_decode_vmax | column -t > ${merge}_fmt2_decode_asc
+
+     # If CLI "-x" (opt_x: 1), convert internal devices to "hex" for recognized block storage arrays (VMAX, Netapp "7-Mode/cDOT" SAN):
+
+          #     dbc-prd1-3010:/tmp $ view ${merge}_fmt2_decode_asc
+          #     <...>
+          #     60000970000196801345533030354541  decode  000196801345  005EA
+          #      ::::::               ::::::::::                        :::::
+          #      ::::::               ::::::::::                        :::::---("005EA":      EMC VMAX Symdev in ASCII)
+          #      ::::::               ::::::::::--------------------------------("3030354541": EMC VMAX Symdev in hex)
+          #      ::::::---------------------------------------------------------("000097":     EMC VMAX OUI)
+
+          if [[ $opt_x -eq 0 ]];then
+
+               mv ${merge}_fmt2_decode_asc ${merge}_fmt2_decode 
+
+          fi
+
+          if [[ $opt_x -eq 1 ]];then
+
+               $awk '{
+                      oui=tolower(substr($1,2,6))
+                      if      (oui~/000097/)        {dev=substr($1,23)}     # {"000097": VMAX OUI, <dev>: 5 bytes}
+                      else if (oui~/0a9800|00a098/) {dev=substr($1,9)}      # {"0a9800/00a098": "7-Mode/cDOT" SAN OUIs, <dev>: 12 bytes}
+                      else                          {dev=$4}                # {"<OUI>":  OUI not recognized, <dev>: "-"}
+                      print $1,$2,$3,dev
+                     }
+                    ' ${merge}_fmt2_decode_asc | column -t > ${merge}_fmt2_decode
+          fi
+
+     # Create LUNID cojoin input file:                                                                   # {${merge}_fmt2_lunid (${tmp}_merge_fmt2_lunid)}
+
+          $awk '{print $NF,"lun_id",$0}' ${merge}_fmt2 | column -t > ${merge}_fmt2_lunid
+
+     # Merge "_decode" and "_lunid" staging files:                                                       # {${merge}_fmt3 (${tmp}_merge_fmt3)}
+
+       #  ${merge}_fmt3:
+
+       #  60000970000196801695533030313731  decode  000196801695           00171
+       #  60000970000196801695533030313731  lun_id  DBBS3DM_DT03_268G_001  262G   mpathjy  EMC,SYMMETRIX  VMAX100K  60000970000196801695533030313731
+       #  60000970000196801695533030313732  decode  000196801695           00172
+       #  60000970000196801695533030313732  lun_id  DBBS3DM_DT03_268G_002  262G   mpathjx  EMC,SYMMETRIX  VMAX100K  60000970000196801695533030313732
+
+          sort -k1,1 ${merge}_fmt2_decode ${merge}_fmt2_lunid | column -t > ${merge}_fmt3
+
+     # Create "fmt4" ASM cojoin input file:                                                              # {$orasm (/tmp/orasm)}
+
+       #  ${merge}_fmt4_dec
+
+       #  000196801695_00171  dec  2018_03-25  svl-rdbms-b1  CFNSVL61,DBBS3DM1  DBBS3DM_DT03_268G_001  262G  mpathjy  EMC,SYMMETRIX  VMAX100K  60000970000196801695533030313731  000097  000196801695  00171
+       #  000196801695_00172  dec  2018_03-25  svl-rdbms-b1  CFNSVL61,DBBS3DM1  DBBS3DM_DT03_268G_002  262G  mpathjx  EMC,SYMMETRIX  VMAX100K  60000970000196801695533030313732  000097  000196801695  00172
+
+          $awk '$2=="decode" {
+                              lunid_d=sprintf("%s",$1)
+                              dc1=$3
+                              dc2=$4
+                             }
+                $2=="lun_id" {
+                              lunid_m=sprintf("%s",$1)
+                              oui_m=substr(lunid_m,2,6)
+                              asmdisk_m=$3
+                              size_m=_m=$4
+                              mpath_m=$5
+                              type_m=$6
+                              model_m=$7
+                              if (lunid_d!=lunid_m) {dc1="-";dc2="-"}
+                              print dc1"_"dc2" dec "date,host,db_inst,asmdisk_m,size_m,mpath_m,type_m,model_m,lunid_m,oui_m,dc1,dc2
+                             }
+               ' date="$date" host="$host" db_inst="$(cat $db_inst)" ${merge}_fmt3 | column -t | sort -k1,2 > ${merge}_fmt4_dec
+
+     # If "decode_only" (e.g. CLI "-d" specified), create content file used as input by "adt_sum" & "adt_det":
+
+          if [[ $opt_d -eq 1 ]];then
+
+               $awk '{print $3,$4,$6,$7,$8,$11,$12,$9,$10,$13,$14}' ${merge}_fmt4_dec | column -t | sort -k3,3 > ${merge}_fmt4_dec_d
+
+          fi
+
+     # If not "decode_only" (e.g. CLI "-d" not specified), check/merge" EMC VMAX Symdec "bound" data with ASM LUNID "decode" data:
+
+          if [[ $opt_d -eq 0 ]];then
+
+               $awk             'BEGIN {fnd_vmax=0}
+                     $(NF-2)=="000097" {fnd_vmax=1
+                                        sn_dev=$(NF-1)"_"$NF
+                                        print sn_dev}
+                                ' ${merge}_fmt4_dec | sort -u > ${srch}_sn_dev_vmax                           # {Create VMAX "<SN>_<Symdev>" search file, sample entry: "000196800518_00286"}
+
+               if [[ -s ${srch}_sn_dev_vmax ]];then
+
+                    $awk '/^000/{print substr($1,1,12)}' ${srch}_sn_dev_vmax | sort -u > ${srch}_sn_vmax      # {Create VMAX "<SN>" search file, sample entry: "000196800518"}
+
+               fi
+
+               if [[ -s ${srch}_sn_vmax && -d /usr/symcli/bin ]];then
+
+                    if [[ -z $dev ]];then
+
+                         dev=$(echo $dev_raw)
+
+                         for sn in $(cat ${srch}_sn_vmax);do
+
+                              $sudo symdev -sid $sn list
+
+                         done > $dev
+
+                    fi
+
+                    $awk '/^Symmetrix ID:/ {sn=$NF}
+                             $1~pat_symdev {
+                                            symdev=$1
+                                            gsub(/N\/A          N\/A/,"N/A       -  N/A",$0)
+                                            gsub(/Not Visible/,"Not_Visible",$0)
+                                            gsub(/2-Way Mir/,"2-Way-Mir",$0)
+                                            type=$4
+                                            print sn"_"symdev" typ "type
+                                           }
+                         ' pat_symdev="^${pat_symdev}$" $dev | egrep -f ${srch}_sn_dev_vmax | sort -u | column -t > ${merge}_fmt4_typ
+
+                    if [[ -z $bnd ]];then
+
+                         bnd=$(echo $bnd_raw)
+
+                         for sn in $(cat ${srch}_sn_vmax);do
+
+                              $sudo symcfg -sid $sn -tdev -bound list -mb
+
+                         done > $bnd
+
+                    fi
+
+                    $awk '$0~/^Symmetrix ID:/ {
+                                               sn=$NF
+                                               key_model=substr(sn,6,2)                   # {VMAX3 Models: "68/67/72" ~ "100K/200K/400K"}
+                                              }
+                                $1~pat_symdev {
+                                               symdev=$1
+                                               cfgd_mib=$4
+                                               aloc_mib=$5
+                                               aloc_pct=$6
+                                               comp_rat=$NF
+                                               if (cfgd_mib==6) {used_mib=0}
+                                               if (cfgd_mib!=6 && comp_rat==0)    {
+                                                                                   used_mib="-"
+                                                                                   if (key_model~/^6[78]$|^72$/) {used_mib=aloc_mib}
+                                                                                  }
+                                               if (cfgd_mib!=6 && comp_rat=="-")  {used_mib=aloc_mib}
+                                               if (cfgd_mib!="6" && comp_rat~/:/) {
+                                                                                   split(comp_rat,ary_opt,":")
+                                                                                   comp_opt=ary_opt[1]
+                                                                                   used_mib=sprintf("%.0f",(aloc_mib/comp_opt))
+                                                                                  }
+                                               print sn"_"symdev" bnd "cfgd_mib,aloc_mib,aloc_pct,used_mib
+                                              }
+                         ' pat_symdev="^${pat_symdev}$" $bnd | egrep -f ${srch}_sn_dev_vmax | sort -u | column -t > ${merge}_fmt4_bnd
+
+               fi
+
+               sort -k1,1 ${merge}_fmt4_bnd ${merge}_fmt4_typ |\
+
+               $awk '$2=="bnd" {
+                                key_bnd=$1;cfgd_mib_bnd=$3;aloc_mib_bnd=$4;aloc_pct_bnd=$5;used_mib_bnd=$6
+                               }
+                     $2=="typ" {
+                                key_typ=$1;dev_typ=$3;cfgd_mib_typ="-";aloc_mib_typ="-";aloc_pct_typ="-";used_mib_typ="-"
+                                if (key_typ==key_bnd) {print key_typ" bnd "dev_typ,cfgd_mib_bnd,aloc_mib_bnd,aloc_pct_bnd,used_mib_bnd}
+                                if (key_typ!=key_bnd) {print key_typ" bnd "dev_typ,cfgd_mib_typ,aloc_mib_typ,aloc_pct_typ,used_mib_typ}
+                               }
+                    ' | column -t | sort -u > ${merge}_fmt4_typ_bnd
+
+               sort -k1,1 ${merge}_fmt4_typ_bnd ${merge}_fmt4_dec |\
+               $awk '$2=="bnd" {
+                                key_bnd=$1;dev_typ_bnd=$3;cfgd_mib_bnd=$4;aloc_mib_bnd=$5;aloc_pct_bnd=$6;used_mib_bnd=$7
+                               }
+                     $2=="dec" {
+                                key_dec=$1;dev_typ_dec="-";cfgd_mib_dec="-";aloc_mib_dec="-";aloc_pct_dec="-";used_mib_dec="-"
+                                rec_dec=substr($0,24)
+                                if (key_dec==key_bnd) {print rec_dec,dev_typ_bnd,cfgd_mib_bnd,aloc_mib_bnd,aloc_pct_bnd,used_mib_bnd}
+                                if (key_dec!=key_bnd) {print rec_dec,dev_typ_dec,cfgd_mib_dec,aloc_mib_dec,aloc_pct_dec,used_mib_dec}
+                               }
+                    ' | column -t | sort -k4,4 > ${merge}_fmt4_dec_bnd
+
+          fi
+
+     # Capture ASM "Dsk <=> Grp" cojoin input file (data source: "kfed read <Oracle_ASM_Disk>" for loop)
+
+          # ${merge}_fmt4_asmgrp           # {ASM "asmgrp" cojoin input file (data source: "... asmcmd iostat ...")}
+          # ${merge}_fmt4_dskasm           # {ASM "dskasm" cojoin input file (data source: "${merge}_orasm_det")}
+          # ${merge}_orasm_grp_stg         # {$orasm ASM "Grp <=> Dsk" pre stage input file}
+
+          # kfdhdb.dskname:      CFNSVL6_AR_545G_01 ; 0x028: length=18
+          # kfdhdb.grpname:           DG_CFNSVL6_AR ; 0x048: length=13
+
+          # Originally tried to use "asmcmd iostat --suppressheader" to obtain ASM Disk Groups but discovered it does not always report all groups.
+          # One possibility, is that the ASM "iostat" command may only report for ASM Disks that are actively performing IO when command is run.
+          # Now running Oracle "kfed read /dev/mapper/<ASM Disk Partition mpath entry>" for loop to obtain ASM "Disk <=> Group" relationships.
+          #
+          #      - Sample "kfed read" for loop input:    "mpathegp1:  blkid  DBBS3DM_DT01_268G_002"
+          #
+          #      - Sample "kfed read" for loop command:  "...kfed read /dev/mapper/mpathegp1"
+
+          # Original "...asmcmd iostat ..." logic for ASM "Group <=> Disk" correlation:
+          #
+          #      "asm_inst=.../ORACLE_HOME=.../LD_LIBRARY_PATH=..." originally in "adt_env" function:
+          #
+          #           asm_inst=$(ps -ef | awk '$NF~/asm_pmon_[+]ASM/{print substr($NF,10)}')                      # {Capture Oracle RAC node ASM Instance (ex: "+ASM1" for RAC node 1}
+          #           ORACLE_HOME="/oracle/product/grid_home"                                                     # {Define Oracle Home directory,    use to obtain ASM "Grp <=> Disk" table}
+          #           LD_LIBRARY_PATH="/oracle/product/grid_home/lib"                                             # {Define Oracle Grid Home library, use to obtain ASM "Grp <=> Disk" table}
+          #
+          #      Related "... ORACLE_SID=... ...asmcmd iostat ..." originally in "adt_det" function:
+          #
+          #           $sudo ORACLE_SID=${asm_inst} /bin/su oracle -c "/oracle/product/grid_home/bin/asmcmd iostat --suppressheader" 2>/dev/null |\
+          #           $awk '{print $2" asmgrp "$1}' | column -t | sort -k1,1 > ${merge}_fmt4_asmgrp
+
+          # svl-rdbms-b1:/dev/oracleasm/disks $ ls
+          # CFNSVL6_AR_545G_01
+          #
+          # svl-rdbms-b1:/tmp $ sudo /oracle/product/grid_home/bin/kfed read /dev/oracleasm/disks/CFNSVL6_AR_545G_01
+
+          # Sample "${merge}_fmt4_asmgrp" output:     {source: "/dev/oracleasm/disks/<"oracle dba" entries>"}
+          #
+          #      dbc-prd1-3010:/tmp $ view ${merge}_fmt4_asmgrp
+          #      FNTR3PRD_AR_544G_01     asmgrp  DG_FNTR3PRD_AR    FNTR3PRD_AR      FNTR3PRD_AR
+          #      FNTR3PRD_AR_544G_02     asmgrp  DG_FNTR3PRD_AR    FNTR3PRD_AR      FNTR3PRD_AR
+          #      FNTR3PRD_DT01_544G_01   asmgrp  DG_FNTR3PRD_DT01  FNTR3PRD_DT01    FNTR3PRD_DT01
+          #      FNTR3PRD_DT01_544G_02   asmgrp  DG_FNTR3PRD_DT01  FNTR3PRD_DT01    FNTR3PRD_DT01
+          #      <...>
+          #      DEL_WIILPRD_RC_16G_001  asmgrp  DG_WIILPRD_RC     DEL_WIILPRD_RC   WIILPRD_RC
+          #      DEL_WIILPRD_RC_16G_002  asmgrp  DG_WIILPRD_RC     DEL_WIILPRD_RC   WIILPRD_RC
+          #      <...>
+          #      DEL_WIILPRD_RC_16G_016  asmgrp  DG_WIILPRD_RC     DEL_WIILPRD_RC   WIILPRD_RC
+          #      DEL_WIILPRD_RC_16G_017  asmgrp  DG_WIILPRD_RC     DEL_WIILPRD_RC   WIILPRD_RC
+          #      WIILPRD_RC_16G_01       asmgrp  DG_WIILPRD_RC     WIILPRD_RC       WIILPRD_RC
+          #      WIILPRD_RC_16G_02       asmgrp  DG_WIILPRD_RC     WIILPRD_RC       WIILPRD_RC
+          #      <...>
+          #      WIILPRD_RC_16G_16       asmgrp  DG_WIILPRD_RC     WIILPRD_RC       WIILPRD_RC
+          #      WIILPRD_RC_16G_17       asmgrp  DG_WIILPRD_RC     WIILPRD_RC       WIILPRD_RC
+          #      <...>
+          #      WIILPRD_RC_M_16G_16     asmgrp  DG_WIILPRD_RC_M   WIILPRD_RC_M     WIILPRD_RC_M
+          #      WIILPRD_RC_M_16G_17     asmgrp  DG_WIILPRD_RC_M   WIILPRD_RC_M     WIILPRD_RC_M
+          #      FNTR3PRD_DT01_544G_006  asmgrp  DUMMYDISK         FNTR3PRD_DT01    FNTR3PRD_DT01
+          #      GRID_PRD_233_CL_A_01    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      GRID_PRD_233_CL_A_02    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      GRID_PRD_233_CL_B_01    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      GRID_PRD_233_CL_B_02    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      GRID_PRD_233_CL_C_01    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      GRID_PRD_233_CL_C_02    asmgrp  GRID_PRD_233_CL   GRID_PRD_233_CL  GRID_PRD_233_CL
+          #      ::::::::::::::::::::            :::::::::::::::   :::::::::::::::  :::::::::::::::
+          #      ::::::::::::::::::::            :::::::::::::::   :::::::::::::::  :::::::::::::::---("dsk_hdr_base": internal kfed "kfdhdb.dskname: <ASM Disk>" name base)
+          #      ::::::::::::::::::::            :::::::::::::::   :::::::::::::::--------------------("dsk_ora_base": external "/dev/oracleasm/disks/<ASM Disk>" name base)
+          #      ::::::::::::::::::::            :::::::::::::::--------------------------------------("grp_hdr":      internal kfed "kfdhdb.grpname:" ASM Disk Group label)
+          #      ::::::::::::::::::::-----------------------------------------------------------------("dsk_ora":      external "/dev/oracleasm/disks/<"oracle dba" entry>")
+
+          #      Sample "kfed read" header fields:
+          #
+          #      kfbh.type:                            0 ; 0x002: KFBTYP_INVALID
+          #      kfbh.type:                            1 ; 0x002: KFBTYP_DISKHEAD
+          #
+          #      kfdhdb.grptyp:                        1 ; 0x026: KFDGTP_EXTERNAL
+          #      kfdhdb.hdrsts:                        4 ; 0x027: KFDHDR_FORMER
+          #      kfdhdb.dskname:    CFNSVL6_DT01_545G_01 ; 0x028: length=20
+          #      kfdhdb.grpname:         DG_CFNSVL6_DT01 ; 0x048: length=15
+
+          #    Sample ${merge}_fmt4_asmgrp
+          #
+          #    dsk_ora                asmgrp  grp_hdr          dsk_ora_base  dsk_hdr_base  typ_hdr  sts_hdr
+          #
+          #    CFNDARE_DT02_545G_05   asmgrp  DG_DUMMY_DT02    CFNDARE_DT02  CFNDARE_DT02  DISKHEAD  MEMBER
+          #    CFNDARE_DT02_545G_06   asmgrp  DG_DUMMY_DT02    CFNDARE_DT02  CFNDARE_DT02  DISKHEAD  MEMBER
+          #    <...>
+          #    CFNDARE_DT03_545G_03   asmgrp  -                CFNDARE_DT03  -             INVALID   -
+          #    CFNDARE_DT03_545G_04   asmgrp  -                CFNDARE_DT03  -             INVALID   -
+          #    <...>
+          #    CFNSVL6_DT01_545G_01   asmgrp  DG_CFNSVL6_DT01  CFNSVL6_DT01  CFNSVL6_DT01  DISKHEAD  FORMER
+          #    CFNSVL6_DT01_545G_02   asmgrp  DG_CFNSVL6_DT01  CFNSVL6_DT01  CFNSVL6_DT01  DISKHEAD  FORMER
+
+          for asmdsk in $($sudo ls -l /dev/oracleasm/disks | $awk '$0~/oracle dba/{print "/dev/oracleasm/disks/"$NF}');do
+
+               $sudo /oracle/product/grid_home/bin/kfed read $asmdsk |\
+               $awk                'BEGIN {
+                                           fnd_hdr_typ=0
+                                           fnd_hdr_sts=0
+                                           fnd_hdr_dsk=0
+                                           fnd_hdr_grp=0
+                                          }
+                           $1~/kfbh.type:/{
+                                           fnd_hdr_typ=1
+                                           typ_hdr=substr($NF,index($NF,"_")+1)
+                                          }
+                      $1~/kfdhdb.hdrsts:/ {
+                                           fnd_hdr_sts=1
+                                           sts_hdr=substr($NF,index($NF,"_")+1)
+                                          }
+                     $1~/kfdhdb.dskname:/ {
+                                           fnd_hdr_dsk=1
+                                           sub(/kfdhdb.dskname:[ ]*/,"",$0)
+                                           dsk_hdr=$1
+                                           num_hdr_base=split(dsk_hdr,ary_hdr_base,"_")-2
+                                           for (n=1; n<=num_hdr_base; n++) {dsk_hdr_base=dsk_hdr_base"_"ary_hdr_base[n]}
+                                           dsk_hdr_base=substr(dsk_hdr_base,2)
+                                          }
+                     $1~/kfdhdb.grpname:/ {
+                                           fnd_hdr_grp=1
+                                           sub(/kfdhdb.grpname:[ ]*/,"",$0)
+                                           grp_hdr=$1
+                                          }
+                                      END {
+                                           dsk_ora=substr(asmdsk,22)
+                                           dsk_ora_base=""
+                                           num_ora_base=split(dsk_ora,ary_ora_base,"_")-2
+                                           for (n=1; n<=num_ora_base; n++) {dsk_ora_base=dsk_ora_base"_"ary_ora_base[n]}
+                                           dsk_ora_base=substr(dsk_ora_base,2)
+                                           if (fnd_hdr_typ==0) {typ_hdr="-"}
+                                           if (fnd_hdr_sts==0) {sts_hdr="-"}
+                                           if (fnd_hdr_dsk==0) {dsk_hdr_base="-"}
+                                           if (fnd_hdr_grp==0) {grp_hdr="-"}
+                                           print dsk_ora" asmgrp "grp_hdr,dsk_ora_base,dsk_hdr_base,typ_hdr,sts_hdr
+                                          }' asmdsk="$asmdsk"
+
+          done | column -t | sort -k4,4 > ${merge}_fmt4_asmgrp
+
+##################################################################################################################################################
+
+###### Capture Oracle DB(s) on host, source: "kfed "kfdhdb.dskname:" ASM Disk name prefix (ex DB "WIILPRD" of Disk "WIILPRD_DT01_544G_001")
+
+######   $awk '$(NF-2)!~/^-$|^GRID_|_CL_/{print substr($(NF-2),1,index($(NF-2),"_")-1)}' ${merge}_fmt4_asmgrp | sort -u > $db_base
+
+##################################################################################################################################################
+
+     # Capture Oracle DB(s) on host, source: "/dev/oracleasm/disks" ASM Disk name prefix (ex DB "WIILPRD" of Disk "WIILPRD_DT01_544G_001"):
+
+         $sudo ls -l /dev/oracleasm/disks | $awk '$0~/oracle dba/ && $NF!~/^-$|^GRID_|_CL_/ {print substr($NF,1,index($NF,"_")-1)}' | sort -u > $db_base
+
+}
+
+adt_lun () {
+
+# Syntax: adt_lun
+
+# Description: Creates "LUN/Path" summary file, identifies LUN types ("SAN, GK, Lcl"), warn if "SAN" LUNs < 4 paths. 
+
+# Code:
+
+     # Create "LUN/Path" details file ("${merge}_lun_det"):
+
+          $awk 'function prt_lun () {
+                                     if (num_paths==0) {
+                                                        pathset="<tbd>"
+                                                        sts="<tbd>"
+                                                       }
+                                     if (num_paths >0) {
+                                                        asort(ary_vhbas)
+                                                        asort(ary_vhba_sts)
+                                                        dif_sts=0
+                                                        sts_csv=""
+                                                        for (p=1; p<=num_paths; p++) {
+                                                                                      pathset=pathset","ary_vhbas[p]
+                                                                                      sts_cmp2=substr(ary_vhba_sts[p],index(ary_vhba_sts[p],":")+1)
+                                                                                      sts_csv=sts_csv","sts_cmp2
+                                                                                      if (sts_cmp1!=sts_cmp2) {dif_sts=1}
+                                                                                     }
+                                                        pathset=substr(pathset,2)
+                                                        sts_csv=substr(sts_csv,2)
+                                                        sts=sts_cmp1
+                                                        if (dif_sts==1) {sts=sts_csv}
+                                                       }
+                                     print date,host,lunid,platform,size,pathset,num_paths,sts,lun_typ
+                                    }
+
+                      BEGIN {
+                             lunid="-"
+                             num_luns=0
+                             num_paths=0
+                             pat_scsi="[0-9]+:[0-9]+:[0-9]+:[0-9]+"
+                             pat_san=":000097:00a098:0a9800:24a937:f47acc:0024f4:d05fce:3c912b:"
+                             pat_trn=":VMAX--:cDOT--:7Mode-:PureFA:SldFre:KmnRio:HDS---:Vexata:"
+                            }
+                   $3~/dm-/ {                             
+                             ++num_luns
+                             if (num_luns>1) {prt_lun()}
+                             num_paths=0
+                             pathset=""
+                             size=""
+                             gsub(/^,/,"",$NF)
+                             platform=""
+                             for (f=4; f<=NF; f++) {
+                                                    sub(/^,/,"",$f)
+                                                    platform=platform","$f
+                                                   }
+                             platform=substr(platform,2)
+                             lun_typ="-"
+                             pat_oui="-"
+                             if (length($2)==35) {                                  # "mpathe (360000970000196801695533030333332) dm-3 EMC ,SYMMETRIX" 
+                                                  lunid=substr($2,3,32)
+                                                  pat_oui=":"substr($2,4,6)":"
+                                                 }
+                             if (length($2)==19) {                                  # "mpathr (20024f40068900007) dm-27 KMNRIO ,K2"
+                                                  lunid=substr($2,2,17)
+                                                   pat_oui=":"substr($2,3,6)":"
+                                                  }
+                             if (pat_san~pat_oui) {lun_typ="SAN"}
+                            }
+                 $1~/size=/ {
+                             size=substr($1,match($1,/[0-9]/),match($1,/[[:upper:]]/)-index($1,"="))
+                             if (platform~/SYMMETRIX/ && size=="5.6M") {lun_typ="GK"}
+                            }
+                $2~pat_scsi {
+                             ++num_paths
+                             if (num_paths==1) {
+                                                sts_cmp1=""
+                                                for (c=5; c<=NF; c++) {sts_cmp1=sts_cmp1"_"$c}
+                                                sts_cmp1=substr(sts_cmp1,2)
+                                               }
+                             split($2,ary_adr,":")
+                             vhba=ary_adr[1]
+                             ary_vhbas[num_paths]=vhba
+                             sts=""
+                             for (c=5; c<=NF; c++) {sts=sts"_"$c}
+                             sts=substr(sts,2)
+                             vhba_sts=vhba":"sts
+                             ary_vhba_sts[num_paths]=vhba_sts
+                            }
+                        END {prt_lun()}
+                     ' date="$date" host="$host" ${multi}_raw | column -t | sort -k5,5 |\
+          $awk 'BEGIN {print "Date Hostname LUN_ID Platform Size Pathset #_Paths Status Type"}
+                      {print $0}' | column -t |\
+          $awk '/^Date/ {
+                         print $0
+                         idx_sub0_1=index($0,"Date")
+                         len_sub0_1=index($0,"#_Paths")-idx_sub0_1-1
+                         idx_sub0_2=index($0,"Status")
+                        }
+               /^[0-9]/ {
+                         rec_sub0_1=substr($0,idx_sub0_1,len_sub0_1)
+                         rec_sub0_2=substr($0,idx_sub0_2)
+                         printf("%s %4s     %s\n",rec_sub0_1,$7,rec_sub0_2)
+                        }' |\
+          $awk 'BEGIN {print ""};{print $0};END {print ""}' |\
+          $awk 'BEGIN {print "\nHost LUN Details:"};{print $0}' > ${merge}_lun_det
+
+     # Create "LUN/Path" summary file ("${merge}_lun_sum"):
+
+          $awk '/^[0-9]/{print $4,$5,$6,$7,$8,$9}' ${merge}_lun_det | sort | uniq -c | column -t | sort -k3,3 |\
+          $awk 'BEGIN {print "Date Hostname #_LUNs Platform Size Pathset #_Paths Status Type"}
+                      {print date,host,$0}
+               ' date="$date" host="$host" | column -t |\
+          $awk '/^Date/ {
+                         print $0
+                         idx_sub0_1=index($0,"Date")
+                         len_sub0_1=index($0,"#_LUNs")-idx_sub0_1-1
+                         idx_sub0_2=index($0,"Platform")
+                         len_sub0_2=index($0,"#_Paths")-idx_sub0_2-1
+                        }
+               /^[0-9]/ {
+                         rec_sub0_1=substr($0,idx_sub0_1,len_sub0_1)
+                         rec_sub0_2=substr($0,idx_sub0_2,len_sub0_2)
+                         printf("%s %6s  %s %4s     %s  %s\n",rec_sub0_1,$3,rec_sub0_2,$7,$8,$9)
+                        }' |\
+          $awk 'BEGIN {print ""};{print $0};END {print ""}' |\
+          $awk 'BEGIN {print "\nHost LUN Summary:"};{print $0}' > ${merge}_lun_sum
+
+     # Create "LUN/Path" combined "summary/details" output file ("$paths: /tmp/lun_paths_<hostname>"):
+
+          cp ${merge}_lun_sum $paths
+
+          $awk 'BEGIN {fnd_det=0};/Host LUN Details:/{fnd_det=1};{if (fnd_det==1) {print $0}}' ${merge}_lun_det >> $paths
+
+}
+
+adt_sum () {
+
+# Syntax: adt_sum
+
+# Description: Perform final formatting and add header for "$summary" output file.
+
+# Code:
+
+     # If "decode_only" (e.g. CLI "-d" specified), capture Oracle "DB" granular data (excl. LUN "bound" data):
+
+          if [[ $opt_d -eq 1 ]];then
+
+               for db in $(cat $db_base);do
+
+                    num_grp=$(egrep "^${db}_" ${merge}_fmt4_asmgrp | $awk '$3!="-"' | wc -l)
+
+                    num_shr=$(egrep "^${db}_" ${merge}_fmt4_asmgrp | wc -l)
+
+                    $awk                   'BEGIN {asmdisk="-"}
+                                      $1~/^[0-9]/ {date=$1;host=$2;pat_db1="^"db"_";pat_db2="_"db"_"}
+                         $3~pat_db1 || $3~pat_db2 {asmdisk=$3}
+                                              END {print date,host,os_rel,symcli_ver,db,num_grp,num_shr}
+                                           ' db="${db}" num_grp="$num_grp" num_shr="$num_shr" os_rel="$os_rel" symcli_ver="$symcli_ver" ${merge}_fmt4_dec_d
+
+               done |\
+               $awk 'BEGIN {print "Date Hostname OS_Rel SYMCLI Ora_DB #_Grp #_Shr"};{print $0}' | column -t |\
+               $awk         'BEGIN {print ""}
+                     $0~/#_Grp|^$/ {
+                                    if ($0~/#_Grp/) {idx_sub0=index($0,"#_Grp")-3}
+                                    print $0
+                                   }
+                       $0~/^[0-9]/ {rec_sub0=substr($0,1,idx_sub0);printf("%s %5s %6s\n",rec_sub0,$6,$7)}' |\
+               $awk 'BEGIN {print "\nOracle ASM DB(s):"};{print $0};END {print ""}' > ${merge}_orasm_sum
+
+          fi
+
+     # If not "decode_only" (e.g. CLI "-d" not specified), capture Oracle "DB" granular data (incl. LUN "bound" data):
+
+          if [[ $opt_d -eq 0 ]];then
+
+               for db in $(cat $db_base);do
+
+                    num_grp=$(egrep "^${db}_" ${merge}_fmt4_asmgrp | $awk '$3!="-"' | wc -l)
+
+                    num_shr=$(egrep "^${db}_" ${merge}_fmt4_asmgrp | wc -l)
+
+                    $awk                      'BEGIN {
+                                                      asmdisk="-"
+                                                      cfg_mib_ttl=0
+                                                      alc_mib_ttl=0
+                                                      usd_mib_ttl=0
+                                                      cfg_mib_dash=0
+                                                      alc_mib_dash=0
+                                                      usd_mib_dash=0
+                                                     }
+                                         $1~/^[0-9]/ {date=$1;host=$2;pat_db1="^"db"_";pat_db2="_"db"_"}
+                            $4~pat_db1 || $4~pat_db2 {
+                                                     asmdisk=$4
+                                                     if ($(NF-3)~/^[0-9]+$/) {cfg_mib_ttl=cfg_mib_ttl+$(NF-3)};if ($(NF-3)=="-") {cfg_mib_dash=1}
+                                                     if ($(NF-2)~/^[0-9]+$/) {alc_mib_ttl=alc_mib_ttl+$(NF-2)};if ($(NF-2)=="-") {alc_mib_dash=1}
+                                                     if ($(NF-0)~/^[0-9]+$/) {usd_mib_ttl=usd_mib_ttl+$(NF-0)};if ($(NF-0)=="-") {usd_mib_dash=1}
+                                                    }
+                                                END {
+                                                     if (cfg_mib_ttl~/^[0-9]+$/) {cfg_tib_ttl=sprintf("%.1f",(cfg_mib_ttl/1024/1024))};if (cfg_mib_dash==1) {cfg_tib_ttl="-"}
+                                                     if (alc_mib_ttl~/^[0-9]+$/) {alc_tib_ttl=sprintf("%.1f",(alc_mib_ttl/1024/1024))};if (alc_mib_dash==1) {alc_tib_ttl="-"}
+                                                     if (usd_mib_ttl~/^[0-9]+$/) {usd_tib_ttl=sprintf("%.1f",(usd_mib_ttl/1024/1024))};if (usd_mib_dash==1) {usd_tib_ttl="-"}
+                                                     if (alc_mib_dash==0 && cfg_mib_dash==0 && cfg_mib_ttl!=0) {alc_cfg_pct=sprintf("%.0f",(100*alc_mib_ttl/cfg_mib_ttl))} else {alc_cfg_pct="-"}
+                                                     if (alc_mib_dash==0 && usd_mib_dash==0 && usd_mib_ttl!=0) {alc_usd_rat=sprintf("%.1f:1",(alc_mib_ttl/usd_mib_ttl))}   else {alc_usd_rat="-"}
+                                                     print date,host,os_rel,symcli_ver,db,num_grp,num_shr,cfg_tib_ttl,alc_tib_ttl,alc_cfg_pct,usd_tib_ttl,alc_usd_rat
+                                                    }
+                                              ' db="${db}" num_grp="$num_grp" num_shr="$num_shr" os_rel="$os_rel" symcli_ver="$symcli_ver" ${merge}_fmt4_dec_bnd
+
+               done |\
+               $awk 'BEGIN {print "Date Hostname OS_Rel SYMCLI Ora_DB #_Grp #_Shr Cfg_TiB Alc_TiB %_Alc Usd_TiB Alc/Usd"};{print $0}' | column -t |\
+               $awk     'BEGIN {print ""}
+                    /#_Grp|^$/ {
+                                if ($0~/#_Grp/) {idx_sub=index($0,"#_Grp")-3}
+                                print $0
+                               }
+                      /^[0-9]/ {
+                                rec_sub=substr($0,1,idx_sub)
+                                num_grp=sprintf("%4s",$(NF-6))
+                                num_shr=sprintf("%5s",$(NF-5))
+                                cfg_tib=sprintf("%8s",$(NF-4))
+                                alc_tib=sprintf("%7s",$(NF-3))
+                                alc_pct=sprintf("%4s",$(NF-2))
+                                usd_tib=sprintf("%8s",$(NF-1))
+                                alc_usd=sprintf("%6s",$(NF-0))
+                                print rec_sub"  "num_grp"  "num_shr"  "cfg_tib"  "alc_tib"  "alc_pct"  "usd_tib"  "alc_usd
+                               }' |\
+               $awk 'BEGIN {print "\nOracle ASM DB(s):"};{print $0};END {print ""}' > ${merge}_orasm_sum
+
+          fi
+
+}
+
+adt_det () {
+
+# Syntax: adt_det
+
+# Description: Perform final formatting and add header for "$details" output file.
+
+# Code:
+
+     # If "decode_only" (e.g. CLI "-d" specified), create DB capacity utilization details ("${merge}_orasm_det" & "${merge}_orasm_grp"):     {exclude "bound" data}
+
+               #     Sample "ASM Disk" granular data:
+               #
+               #     dbc-prd1-3010:/tmp $ view /tmp/asmtmp_merge_orasm_det
+               #
+               #     Date        Host           ASM_Disk                Size   Mpath    LUN_ID                            OUI     Platform       Model     EMC_SN|Net_OS  Device
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G_001  16G    mpathec  60000970000196801345533030363444  000097  EMC,SYMMETRIX  VMAX100K  000196801345   0064D
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G_017  16G    mpathdl  60000970000196801345533030363437  000097  EMC,SYMMETRIX  VMAX100K  000196801345   00647
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G_01     545G   mpathew  60000970000196801345533030424235  000097  EMC,SYMMETRIX  VMAX100K  000196801345   00BB5
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G_02     545G   mpathey  60000970000196801345533030424236  000097  EMC,SYMMETRIX  VMAX100K  000196801345   00BB6
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_006  545G   mpathev  60000970000196801345533030354541  000097  EMC,SYMMETRIX  VMAX100K  000196801345   005EA
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_01   545G   mpathex  60000970000196801345533030424237  000097  EMC,SYMMETRIX  VMAX100K  000196801345   00BB7
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_07   545G   mpathfn  60000970000196801345533030433536  000097  EMC,SYMMETRIX  VMAX100K  000196801345   00C56
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G_001   545G   mpathil  60000970000197800973533030303837  000097  EMC,SYMMETRIX  VMAX250F  000197800973   00087
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G_006   545G   mpathkd  60000970000197800973533030313544  000097  EMC,SYMMETRIX  VMAX250F  000197800973   0015D
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G_01     16G    mpathjq  60000970000197800973533030313037  000097  EMC,SYMMETRIX  VMAX250F  000197800973   00107
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G_17     16G    mpathhw  60000970000197800973533030313137  000097  EMC,SYMMETRIX  VMAX250F  000197800973   00117
+               #
+
+               #     Sample "ASM Disk Group" granular data:
+               #
+               #     dbc-prd1-3010:/tmp $ view /tmp/asmtmp_merge_orasm_grp
+               #
+               #     Date        Host           ASM_Disk_Group      #_Shr
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G    17
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G       2
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G     8     <=== {"FNTR3PRD_DT01_544G_006" vs "FNTR3PRD_DT01_544G_06": possible misnamed "near duplicate"}
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G_006  6
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G      17
+               #
+
+          if [[ $opt_d -eq 1 ]];then
+
+               # Create ASM Disk "merge" file (${merge}_orasm_det):
+
+               $awk '{print $3" dskasm "$0}' ${merge}_fmt4_dec_d | column -t | sort -k1,1 > ${merge}_fmt4_dec_d_dskasm
+
+               sort -k1,1 ${merge}_fmt4_asmgrp ${merge}_fmt4_dec_d_dskasm | column -t |\
+               $awk '$2=="asmgrp" {
+                                   sts_hdr=$(NF-0)
+                                   typ_hdr=$(NF-1)
+                                   dsk_hdr_base=$(NF-2)
+                                   dsk_ora_base=$(NF-3)
+                                   grp_hdr=$(NF-4)
+                                  }
+                     $2=="dskasm" {print dsk_hdr_base,dsk_ora_base,grp_hdr,typ_hdr,sts_hdr,$0}' | column -t | sort -k2,2 |\
+               $awk 'BEGIN {print "Date Hostname ASM_Disk_Group ASM_Disk ASM_Typ ASM_Sts Size Mpath LUN_ID OUI Platform Model Array_SN|OS Device"}
+                           {print $8,$9,$3,$10,$4,$5,$11,$12,$13,$14,$15,$16,$17,$18}' | column -t |\
+               $awk 'BEGIN {print "\nOracle ASM Disks:\n"};{print $0};END {print ""}' > ${merge}_orasm_det
+
+               # Create ASM Disk Group "merge" file (${merge}_orasm_grp):
+
+               $awk '$0~/^[0-9]/ {print $4" dskasm "$0}' ${merge}_orasm_det | column -t | sort -k1,1 > ${merge}_fmt4_dskasm
+
+               sort -k1,1 ${merge}_fmt4_asmgrp ${merge}_fmt4_dskasm | column -t |\
+               $awk '$2=="asmgrp" {
+                                   sts_hdr=$(NF-0)
+                                   typ_hdr=$(NF-1)
+                                   dsk_hdr_base=$(NF-2)
+                                   dsk_ora_base=$(NF-3)
+                                   grp_hdr=$(NF-4)
+                                  }
+                     $2=="dskasm" {
+                                   rec_sub0=substr($0,match($0,/[0-9][0-9][0-9][0-9]_[0-9][0-9]-[0-9][0-9]/))
+                                   print dsk_hdr_base,dsk_ora_base,grp_hdr,rec_sub0
+                                  }' | sort -k2,2 | column -t > ${merge}_orasm_grp_stg
+
+               $awk 'BEGIN {
+                            num_grp=0
+                            dsk_ora_base_prev="-"	
+                           }
+                  $3!= "-" {
+                            dsk_hdr_base=$1
+                            dsk_ora_base=$2
+                            grp_hdr=$3
+                            date=$4
+                            host=$5
+                            if (grp_hdr==grp_hdr_prev && dsk_ora_base==dsk_ora_base_prev || dsk_ora_base_prev=="-") {++num_grp}
+                            if (grp_hdr!=grp_hdr_prev || dsk_ora_base!=dsk_ora_base_prev && dsk_ora_base_prev!="-") {
+                                                                                                                     print date_prev,host_prev,grp_hdr_prev,dsk_ora_base_prev,num_grp
+                                                                                                                     num_grp=1
+                                                                                                                    }
+                            date_prev=date
+                            host_prev=host
+                            grp_hdr_prev=grp_hdr
+                            dsk_ora_base_prev=dsk_ora_base
+                            dsk_hdr_base_prev=dsk_hdr_base
+                           }
+                       END {print date,host,grp_hdr,dsk_ora_base,num_grp}
+                    ' ${merge}_orasm_grp_stg |\
+               $awk 'BEGIN {print "Date Hostname ASM_Disk_Group ASM_Disk_Base #_Grp"};{print $0}' | column -t |\
+               $awk         'BEGIN {print ""}
+                     $0~/#_Grp|^$/ {if ($0~/#_Grp/) {idx_sub0=index($0,"#_Grp")-3};print $0}
+                       $0~/^[0-9]/ {rec_sub0=substr($0,1,idx_sub0);printf("%s %5s\n",rec_sub0,$5)}' |\
+               $awk 'BEGIN {print "\nOracle ASM Disk Groups:"};{print $0};END {print ""}' > ${merge}_orasm_grp
+
+          fi
+
+     # If not "decode_only" (e.g. CLI "-d" not specified), create DB & Disk Group capacity utilization details ("${merge}_orasm_det" & "${merge}_orasm_grp"):     {include "bound" data}
+
+               #     Sample "ASM Disk" granular data:
+               #
+               #     dbc-prd1-3010:/tmp $ view /tmp/asmtmp_merge_orasm_det
+               #
+               #     Date        Hostname       Ora_ASM_Disk            Size   Platform       Model     LUN_ID                            EMC_SN|Net_OS  Device  Type  Cfg_MiB  Alc_MiB  %_Alc  Usd_MiB  Alc/Usd
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G_001  16G    EMC,SYMMETRIX  VMAX100K  60000970000196801345533030363444  000196801345   0064D   TDEV    16380     6610    40      6610   1.0:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G_017  16G    EMC,SYMMETRIX  VMAX100K  60000970000196801345533030363437  000196801345   00647   TDEV    16380     6641    41      6641   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G_01     545G   EMC,SYMMETRIX  VMAX100K  60000970000196801345533030424235  000196801345   00BB5   TDEV   557700   495804    89    495804   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G_02     545G   EMC,SYMMETRIX  VMAX100K  60000970000196801345533030424236  000196801345   00BB6   TDEV   557700   495854    89    495854   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_006  545G   EMC,SYMMETRIX  VMAX100K  60000970000196801345533030354541  000196801345   005EA   TDEV   557700   436353    78    436353   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_01   545G   EMC,SYMMETRIX  VMAX100K  60000970000196801345533030424237  000196801345   00BB7   TDEV   557700   476604    85    476604   1.0:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G_07   545G   EMC,SYMMETRIX  VMAX100K  60000970000196801345533030433536  000196801345   00C56   TDEV   557700   424472    76    424472   1.0:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G_001   545G   EMC,SYMMETRIX  VMAX250F  60000970000197800973533030303837  000197800973   00087   TDEV   557700   556462   100    173894   3.2:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G_006   545G   EMC,SYMMETRIX  VMAX250F  60000970000197800973533030313544  000197800973   0015D   TDEV   557700   556567   100    173927   3.2:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G_01     16G    EMC,SYMMETRIX  VMAX250F  60000970000197800973533030313037  000197800973   00107   TDEV    16380     6628    40      3013   2.2:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G_17     16G    EMC,SYMMETRIX  VMAX250F  60000970000197800973533030313137  000197800973   00117   TDEV    16380     6620    40      3678   1.8:1
+               #
+
+               #     Sample "ASM Disk Group" granular data:
+               #
+               #     dbc-prd1-3010:/tmp $ view /tmp/asmtmp_merge_orasm_grp
+               #
+               #     Date        Hostname       ASM_Disk_Group      #_Shr   Cfg_MiB   Alc_MiB  %_Alc   Usd_MiB  Alc/Usd
+               #     2018_04-09  dbc-prd1-3010  DEL_WIILPRD_RC_16G    17     278460    112589    40     112589   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_AR_544G       2    1115400    991658    89     991658   1.0:1
+               #     2018_04-09  dbc-prd1-3010  FNTR3PRD_DT01_544G     8    4461600   3720563    83    3720563   1.0:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_DT01_544G      6    3346200   3339031   100    1038177   3.2:1
+               #     <...>
+               #     2018_04-09  dbc-prd1-3010  WIILPRD_RC_M_16G      17     278460    112498    40      49091   1.8:1
+               #
+
+          if [[ $opt_d -eq 0 ]];then
+
+               # Create ASM Disk "merge" file (${merge}_orasm_det):
+
+               $awk '{print $4" dskasm "$0}' ${merge}_fmt4_dec_bnd | column -t | sort -k1,1 > ${merge}_fmt4_dec_bnd_dskasm
+
+               sort -k1,1 ${merge}_fmt4_asmgrp ${merge}_fmt4_dec_bnd_dskasm | column -t |\
+               $awk '$2=="asmgrp" {
+                                   sts_hdr=$(NF-0)
+                                   typ_hdr=$(NF-1)
+                                   dsk_hdr_base=$(NF-2)
+                                   dsk_ora_base=$(NF-3)
+                                   grp_hdr=$(NF-4)
+                                  }
+                     $2=="dskasm" {print dsk_hdr_base,dsk_ora_base,grp_hdr,typ_hdr,sts_hdr,$0}' | column -t | sort -k2,2 |\
+               $awk 'BEGIN {print "Date Hostname ASM_Disk_Group ASM_Disk ASM_Typ ASM_Sts Size Platform Model LUN_ID Array_SN|OS Device Type Cfg_MiB Alc_MiB %_Alc Usd_MiB Alc/Usd"}
+                           {print $8,$9,$3,$11,$4,$5,$12,$14,$15,$16,$18,$19,$20,$21,$22,$23,$24}' | column -t |\
+               $awk       'BEGIN {print ""}
+                    /Cfg_MiB|^$/ {
+                                  if ($0~/Cfg_MiB/) {idx_sub=index($0,"Cfg_MiB")-3}
+                                  print $0
+                                 }
+                        /^[0-9]/ {
+                                  sn=$(NF-6)
+                                  key_model=substr(sn,6,2)                   # {VMAX3 Models: "68/67/72" ~ "100K/200K/400K"}
+                                  rec_sub=substr($0,1,idx_sub) f
+                                  if ($(NF-3)~/^[0-9]+$/) {cfg_mib=sprintf("%7d",$(NF-3))} else {cfg_mib=sprintf("%7s","-")}
+                                  if ($(NF-2)~/^[0-9]+$/) {alc_mib=sprintf("%7d",$(NF-2))} else {alc_mib=sprintf("%7s","-")}
+                                  if ($(NF-1)~/^[0-9]+$/) {alc_pct=sprintf("%4d",$(NF-1))} else {alc_pct=sprintf("%4s","-")}
+                                  if ($(NF-0)~/^[0-9]+$/) {usd_mib=sprintf("%8d",$(NF-0))} else {usd_mib=sprintf("%8s","-")}
+                                  if ($(NF-2)~/^[0-9]+$/ && $NF~/^[0-9]+$/ && $NF!=0) {alc_usd=sprintf("%4.1f:1",(alc_mib/usd_mib))}
+                                  else {alc_usd=sprintf("%6s","-")}
+                                  if (key_model~/^6[78]$|^72$/) {alc_usd=sprintf("%4.1f:1","1.0")}
+                                  print rec_sub"  "cfg_mib"  "alc_mib"  "alc_pct"  "usd_mib"  "alc_usd
+                                 }' |\
+               $awk 'BEGIN {print "\nOracle ASM Disks:"};{print $0};END {print ""}' > ${merge}_orasm_det
+
+               # Create ASM Disk Group "merge" file (${merge}_orasm_grp):
+
+               $awk '$0~/^[0-9]/ {print $4" dskasm "$0}' ${merge}_orasm_det | column -t | sort -k1,1 > ${merge}_fmt4_dskasm
+
+               sort -k1,1 ${merge}_fmt4_asmgrp ${merge}_fmt4_dskasm | column -t |\
+               $awk '$2=="asmgrp" {
+                                   sts_hdr=$(NF-0)
+                                   typ_hdr=$(NF-1)
+                                   dsk_hdr_base=$(NF-2)
+                                   dsk_ora_base=$(NF-3)
+                                   grp_hdr=$(NF-4)
+                                  }
+                     $2=="dskasm" {
+                                   rec_sub0=substr($0,match($0,/[0-9][0-9][0-9][0-9]_[0-9][0-9]-[0-9][0-9]/))
+                                   print dsk_hdr_base,dsk_ora_base,grp_hdr,rec_sub0
+                                  }' | sort -k1,1 | column -t > ${merge}_orasm_grp_stg
+
+               $awk 'BEGIN {
+                            num_grp=0
+                            dsk_ora_base_prev="-"
+                            cfg_mib_ttl=0
+                            alc_mib_ttl=0
+                            usd_mib_ttl=0
+                            cfg_mib_dash=0
+                            alc_mib_dash=0
+                            usd_mib_dash=0
+                           }
+                  $3!= "-" {
+                            dsk_hdr_base=$1
+                            dsk_ora_base=$2
+                            grp_hdr=$3
+                            date=$4
+                            host=$5
+                            cfg_mib=$(NF-4)
+                            alc_mib=$(NF-3)
+                            usd_mib=$(NF-1)
+                            if (grp_hdr==grp_hdr_prev && dsk_ora_base==dsk_ora_base_prev || dsk_ora_base_prev=="-") {++num_grp}
+                            if (grp_hdr!=grp_hdr_prev || dsk_ora_base!=dsk_ora_base_prev && dsk_ora_base_prev!="-") {
+                                  if (cfg_mib_dash==1) {cfg_mib_ttl="-"}
+                                  if (alc_mib_dash==1) {alc_mib_ttl="-"}
+                                  if (usd_mib_dash==1) {usd_mib_ttl="-"}
+                                  if (alc_mib_dash==0 && cfg_mib_dash==0 && cfg_mib_ttl!=0) {alc_cfg_pct=sprintf("%.0f",(100*alc_mib_ttl/cfg_mib_ttl))}
+                                  else {alc_cfg_pct="-"}
+                                  if (alc_mib_dash==0 && usd_mib_dash==0 && usd_mib_ttl!=0) {alc_usd_rat=sprintf("%.1f:1",(alc_mib_ttl/usd_mib_ttl))}
+                                  else {alc_usd_rat="-"}
+                                  print date_prev,host_prev,grp_hdr_prev,dsk_ora_base_prev,num_grp,cfg_mib_ttl,alc_mib_ttl,alc_cfg_pct,usd_mib_ttl,alc_usd_rat
+                                  num_grp=1
+                                  cfg_mib_ttl=0
+                                  alc_mib_ttl=0
+                                  usd_mib_ttl=0
+                                  cfg_mib_dash=0
+                                  alc_mib_dash=0
+                                  usd_mib_dash=0
+                                 }
+                            date_prev=date
+                            host_prev=host
+                            grp_hdr_prev=grp_hdr
+                            dsk_ora_base_prev=dsk_ora_base
+                            dsk_hdr_base_prev=dsk_hdr_base
+                            if (cfg_mib~/^[0-9]+$/) {cfg_mib_ttl=cfg_mib_ttl+cfg_mib};if (cfg_mib=="-") {cfg_mib_dash=1}
+                            if (alc_mib~/^[0-9]+$/) {alc_mib_ttl=alc_mib_ttl+alc_mib};if (alc_mib=="-") {alc_mib_dash=1}
+                            if (usd_mib~/^[0-9]+$/) {usd_mib_ttl=usd_mib_ttl+usd_mib};if (usd_mib=="-") {usd_mib_dash=1}
+                           }
+                       END {
+                            if (cfg_mib_dash==1) {cfg_mib_ttl="-"}
+                            if (alc_mib_dash==1) {alc_mib_ttl="-"}
+                            if (usd_mib_dash==1) {usd_mib_ttl="-"}
+                            if (alc_mib_dash==0 && cfg_mib_dash==0 && cfg_mib_ttl!=0) {alc_cfg_pct=sprintf("%.0f",(100*alc_mib_ttl/cfg_mib_ttl))}
+                            else {alc_cfg_pct="-"}
+                            if (alc_mib_dash==0 && usd_mib_dash==0 && usd_mib_ttl!=0) {alc_usd_rat=sprintf("%.1f:1",(alc_mib_ttl/usd_mib_ttl))}
+                            else {alc_usd_rat="-"}
+                            print date,host,grp_hdr,dsk_ora_base,num_grp,cfg_mib_ttl,alc_mib_ttl,alc_cfg_pct,usd_mib_ttl,alc_usd_rat
+                           }
+                    ' ${merge}_orasm_grp_stg |\
+               $awk 'BEGIN {print "Date Hostname ASM_Disk_Group ASM_Disk_Base #_Grp"};{print $0}' | column -t |\
+               $awk         'BEGIN {print ""}
+                     $0~/#_Grp|^$/ {if ($0~/#_Grp/) {idx_sub0=index($0,"#_Grp")-3};print $0"   Cfg_MiB   Alc_MiB  %_Alc   Usd_MiB  Alc/Usd"}
+                       $0~/^[0-9]/ {rec_sub0=substr($0,1,idx_sub0);printf("%s %5s %10s %9s %5s %10s %7s\n",rec_sub0,$5,$6,$7,$8,$9,$10)}' |\
+               $awk 'BEGIN {print "\nOracle ASM Disk Groups:"};{print $0};END {print ""}' > ${merge}_orasm_grp
+
+          fi
+
+     # Compare "listdisks vs blkid" ASM Disks & "check/resolve" duplicate ASM Disk entries returned from "blkid":
+
+          #     ${cmp}_disks_asm                # {shared ASM Disk "compare" file (uniquely sorted "oracleasm listdisks")}
+          #     ${cmp}_disks_blk                # {shared ASM Disk "compare" file (uniquely sorted "blkid /dev/mapper oracleasm")}
+
+          #     ${merge}_fmt4_asm_vld          # {"asm_valid" LUN cojoin input file (format: "<asm_valid ...")}
+          #     ${merge}_fmt4_asm_dup          # {"duplicate" LUN cojoin input file (format: "<duplicate ...")}
+          #     ${merge}_orasm_res             # {$orasm "resolve" staging file (stage ASM querydisk "valid" LUN table)}
+
+          #     Sample "duplicates" verification input stream:
+          #
+          #     sjdbpr653a.corp.webex.com:/users/bnunn/audit/vmax $ sort -k6,6 ${merge}_fmt4_asm_vld ${merge}_fmt4_asm_dup | column -t ...
+          #     duplicate  2018_03-26  sjdbpr653a.corp.webex.com  PDWH_DT02_544G_008  545G  mpathce  EMC,SYMMETRIX  VMAX100K  60000970000196800557533030324231  000196800557  002B1  TDEV
+          #     asm_valid  2018_03-26  sjdbpr653a.corp.webex.com  PDWH_DT02_544G_008  545G  mpathg   EMC,SYMMETRIX  VMAX100K  60000970000196800557533030323337  000196800557  00237  TDEV
+          #     duplicate  2018_03-26  sjdbpr653a.corp.webex.com  PDWH_DT02_544G_008  545G  mpathg   EMC,SYMMETRIX  VMAX100K  60000970000196800557533030323337  000196800557  00237  TDEV
+          #                                                                                 ::::::                                                              ::::::::::::--:::::
+          #        ("mpathg": LUN is valid for consecutive "asm_valid/duplicate" records)---::::::---("mpathg": valid LUN (VMAX100K_00557, Symdev 00237)--------::::::::::::--:::::
+
+          #     Sample "duplicates" resolution in output file ("$orasm": /tmp/orasm):
+          #
+          #     sjdbpr653a.corp.webex.com:/users/bnunn/audit/vmax $ view $orasm     # {"/tmp/orasm": sample "Duplicates:" resolution section (only if "blkid" returns duplicate ASM Disks.}
+          #
+          #     Duplicates:
+          #
+          #          Date        Hostname                   Ora_ASM_Disk        Size  Mpath_LUN  Platform       Model     LUN_ID                            EMC_SN|Net_OS  Device  Type  Valid
+          #          2018_03-26  sjdbpr653a.corp.webex.com  PDWH_DT02_544G_008  545G  mpathce    EMC,SYMMETRIX  VMAX100K  60000970000196800557533030324231  000196800557   002B1   TDEV  no
+          #          2018_03-26  sjdbpr653a.corp.webex.com  PDWH_DT02_544G_008  545G  mpathg     EMC,SYMMETRIX  VMAX100K  60000970000196800557533030323337  000196800557   00237   TDEV  yes
+          #                                                                                                                                                                              :::
+          #              ("Valid" ([yes|no]): "yes" set if "oracleasm querydisk -d <Ora_ASM_Disk>" returns "valid" ASM Disk entry, "no" set if "valid" ASM Disk entry is not returned)---:::
+
+          echo "Messages:" | $awk '{print $0"\n"}' > ${merge}_orasm_res
+
+          if [[ -f /usr/sbin/oracleasm ]];then $sudo /usr/sbin/oracleasm listdisks                           | sort -u > ${cmp}_disks_asm;fi
+
+          $awk '$1~/mapper/ && $NF~/oracleasm/ {asmdsk=substr($2,8,length($2)-8);print asmdsk}' ${blkid}_raw | sort -u > ${cmp}_disks_blk
+
+          cmp ${cmp}_disks_asm ${cmp}_disks_blk > /dev/null 2>&1
+
+          rc_cmp_asm_blk=$?
+
+          if [[ $rc_cmp_asm_blk -ne 0 ]];then
+
+               echo "Warning: Uniquely sorted shared ASM Disks did not match (\"oracleasm listdisks\" versus \"blkid\" commands)." | $awk '{print "     "$0"\n"}' >> ${merge}_orasm_res
+
+          fi
+
+          cmp $db_base $db_pmon > /dev/null 2>&1
+
+          rc_cmp_base_pmon=$?
+
+          if [[ $rc_cmp_base_pmon -ne 0 ]];then
+
+               db_base_csv="-";if [[ -s $db_base ]];then db_base_csv=$(cat $db_base | tr '\n' ',' | $awk '{print substr($1,1,length($1)-1)}');fi
+
+               db_pmon_csv="-";if [[ -s $db_pmon ]];then db_pmon_csv=$(cat $db_pmon | tr '\n' ',' | $awk '{print substr($1,1,length($1)-1)}');fi
+
+               echo "Warning: \"ps -ef | egrep ora_pmon\" DB(s): $db_pmon_csv doesn't match kfed \"kfdhdb.dskname:\" prefix DB(s) $db_base_csv" | $awk '{print "     "$0"\n"}' >> ${merge}_orasm_res
+
+               echo "Warning: ASMLIST has used kfed \"kfdhdb.dskname:\" prefix DB(s) $db_base_csv for performing this audit." | $awk '{print "     "$0"\n"}' >> ${merge}_orasm_res 
+
+          fi
+
+          for db in $(cat $db_base);do
+
+               num_dif=$(awk '/^[0-9]/ && $5==db {print $7-$6}' db="$db" ${merge}_orasm_sum)
+
+               if [[ $num_dif -gt 0 ]];then
+
+                    echo "Warning: DB $db contains $num_dif ASM Disks not associated with any ASM Disk Groups (single \"-\" in ${orasm})." | $awk '{print "     "$0"\n"}' >> ${merge}_orasm_res
+
+               fi
+
+          done
+
+          $awk '$1~/mapper/ && $NF~/oracleasm/ {asmdsk=substr($2,8,length($2)-8);print asmdsk}' ${blkid}_raw | sort | uniq -c  | $awk '$1>1 {print $2}' > ${srch}_asm_dup
+
+          if [[ -s ${srch}_asm_dup ]];then
+
+               echo "Warning: \"blkid\" returned duplicate Shared Oracle ASM Disks for host $host" | $awk '{print "     "$0"\n"}' >> ${merge}_orasm_res
+
+               for asm_disk in $(cat ${srch}_asm_dup);do
+
+                    if [[ $opt_d -eq 0 ]];then $awk '$0~asm_disk {print "duplicate "$1,$2,$4,$5,$6,$9,$13,$7,$8,$11,$12}' asm_disk="[ ]${asm_disk}[ ]" ${merge}_fmt4_dec_bnd;fi
+
+                    if [[ $opt_d -eq 1 ]];then $awk '$0~asm_disk {print "duplicate "$0}' asm_disk="[ ]${asm_disk}[ ]" ${merge}_fmt4_dec_d;fi
+
+               done | column -t > ${merge}_fmt4_asm_dup
+
+               if [[ -f /usr/sbin/oracleasm ]];then
+
+                    $sudo ls -l /dev/mapper | $awk '$(NF-2)~/^mpath/' | column -t > ${merge}_dev_mapper
+
+                    for asm_disk in $(cat ${srch}_asm_dup);do
+
+                         dm_part=$($sudo /usr/sbin/oracleasm querydisk -d ${asm_disk} |\
+                                   $awk '/valid ASM disk/{split($NF,ary_dm,",");dm_part="dm-"substr(ary_dm[2],1,length(ary_dm[2])-1);print dm_part}')
+
+                         mp_lun=$($awk '{if ($NF~dm_part) {print mpath};mpath=$(NF-2);dm=substr($NF,4)}' dm_part="${dm_part}$" ${merge}_dev_mapper)
+
+                         if [[ $opt_d -eq 0 ]];then $awk '$0~mp_lun {print "asm_valid "$1,$2,$4,$5,$6,$9,$13,$7,$8,$11,$12}' mp_lun="[ ]${mp_lun}[ ]" ${merge}_fmt4_dec_bnd;fi
+
+                         if [[ $opt_d -eq 1 ]];then $awk '$0~mp_lun {print "asm_valid "$0}' mp_lun="[ ]${mp_lun}[ ]" ${merge}_fmt4_dec_d;fi
+
+                    done | column -t > ${merge}_fmt4_asm_vld
+
+               fi
+
+               sort -k6,6 ${merge}_fmt4_asm_vld ${merge}_fmt4_asm_dup | column -t |\
+               $awk 'BEGIN {mpath_vld="-"}
+                     /^duplicate/ {
+                                   mpath_dup=sprintf("%s",$6)
+                                   valid="no"
+                                   if (mpath_dup~mpath_vld)  {valid="yes"}
+                                   sub_rec=substr($0,12)
+                                   print sub_rec,valid
+                                   mpath_vld="-"
+                                  }
+                     /^asm_valid/ {
+                                   mpath_vld=sprintf("%s",$6)
+                                  }' > ${merge}_orasm_res_stg
+
+               if [[ $opt_d -eq 0 ]];then
+
+                    $awk 'BEGIN {print "Date Hostname Ora_ASM_Disk Size Mpath_LUN LUN_ID Type Platform Model EMC_SN|Net_OS Device Valid"};{print $0}' ${merge}_orasm_res_stg | column -t |\
+                    $awk 'BEGIN {print "Duplicates:\n"};{print $0};END {print ""}' >> ${merge}_orasm_res
+
+               fi
+
+               if [[ $opt_d -eq 1 ]];then
+
+                    $awk 'BEGIN {print "Date Hostname Ora_ASM_Disk Size Mpath_LUN LUN_ID OUI Platform Model EMC_SN|Net_OS Device Valid"};{print $0}' ${merge}_orasm_res_stg | column -t |\
+                    $awk 'BEGIN {print "Duplicates:\n"};{print $0};END {print ""}' >> ${merge}_orasm_res
+
+               fi
+
+          fi
+
+     # Create "$orasm" (/tmp/orasm) output file
+
+          if [[ $($awk '$0~/^[[:digit:]]/' ${merge}_lun_sum   | wc -l) -gt 0 ]];then cat ${merge}_lun_sum   >  ${merge}_orasm_stg_host;fi                 # {"chk/add" "LUN/Path" check summary}
+
+          if [[ $($awk '$0~/[[:alpha:]]/'  ${merge}_orasm_res | wc -l) -gt 1 ]];then cat ${merge}_orasm_res >> ${merge}_orasm_stg_host;fi                 # {"chk/add" "Warnings:" & "Duplicates:"}
+
+          if [[ $($awk '$0~/^[[:digit:]]/' ${merge}_orasm_sum | wc -l) -gt 0 ]];then cat ${merge}_orasm_sum >> ${merge}_orasm_stg_host;fi                 # {"chk/add" "Oracle ASM DB(s):"}
+
+          if [[ $($awk '$0~/^[[:digit:]]/' ${merge}_orasm_grp | wc -l) -gt 0 ]];then cat ${merge}_orasm_grp >> ${merge}_orasm_stg_host;fi                 # {"chk/add" "Oracle ASM Disk Groups:"}
+
+          if [[ $($awk '$0~/^[[:digit:]]/' ${merge}_orasm_det | wc -l) -gt 0 ]];then cat ${merge}_orasm_det >> ${merge}_orasm_stg_host;fi                 # {"chk/add" "Oracle ASM Disks:"}
+
+          if [[ $opt_h -eq 1 ]];then mv ${merge}_orasm_stg_host ${merge}_orasm_stg1;fi
+
+          if [[ $opt_h -eq 0 ]];then
+
+               $awk               'BEGIN {fnd_grp=0}
+                    $3=="ASM_Disk_Group" {
+                                          fnd_grp=1
+                                          idx_sub0_grp=index($0,"ASM_Disk_Group")
+                                         }
+                              fnd_grp==0 {print $0}
+                              fnd_grp==1 {
+                                          if ($0~/[ ]ASM_Disk_Group[ ]/ || $0~pat_date) {
+                                                                                         rec_sub0_grp=substr($0,idx_sub0_grp)
+                                                                                         printf("%-11s %s\n",$1,rec_sub0_grp)
+                                                                                        }
+                                          else {print $0}
+                                         }
+                                   ' pat_date="^${pat_date}[ ]" ${merge}_orasm_stg_host > ${merge}_orasm_stg1
+
+          fi
+
+          $awk                     'BEGIN {fnd_grp=0}
+               /^Oracle ASM Disk Groups:/ {fnd_grp=1}
+                                          {
+                                           if (fnd_grp == 1 && NF>0 && $0!~/Oracle ASM Disk/) {rec=substr($0,13)}
+                                           else {rec=$0}
+                                           print rec
+                                          }' ${merge}_orasm_stg1 > ${merge}_orasm_stg2
+
+          if [[ $opt_c -eq 1 ]];then dup_nul "${merge}_orasm_stg1" "$orasm";fi                                                # {<Date> prefix all data   & remove consecutive duplicate nulls: "^$"}
+
+          if [[ $opt_c -eq 0 ]];then dup_nul "${merge}_orasm_stg2" "$orasm";fi                                                # {<Date> prefix DB(s) only & remove consecutive duplicate nulls: "^$"}
+
+     # Display Oracle DB overview, warnings & final formatted Oracle ASM Disk audit file location ("$orasm": /tmp/orasm):
+
+          if [[ $($awk '$0~/^[[:digit:]]/' ${merge}_orasm_sum | wc -l) -gt 0 ]];then
+
+               $awk '$0~/[[:alpha:]]|[[:digit:]]/{print "     "$0};/^$/{print $0}' ${merge}_orasm_sum
+
+          fi
+
+          if [[ $($awk '$0~/[[:alpha:]]|^[[:digit:]]/' ${merge}_orasm_res | wc -l) -gt 1 ]];then
+
+               cat ${merge}_orasm_res
+
+          fi
+
+          echo "LUN path information for host $host in $paths" | $awk '{print $0"\n"}'
+
+          echo "Shared Oracle ASM block storage \"Summary, Messages & Details\" for host $host (DB Instance(s): $(cat $db_inst)) in $orasm" | $awk '{print $0"\n"}'
+
+          if [[ $opt_t -eq 0 ]];then $sudo rm -rf ${tmp}_*;fi                                                  # {"-t" ([0|1]: [remove|save]} "${tmp}_..." files)}
+
+}
+
+# Begin Main Program
+
+script=$0                                                                                                      # {Capture script name}
+
+fields=$*                                                                                                      # {Capture script parameters}
+
+cmd_line="$script $fields"                                                                                     # {"prompt test" for $cmd_line}
+
+adt_env                                                                                                        # {"discover/initialize" environment}
+
+adt_cli "$fields"                                                                                              # {Capture command line options & parms}
+
+adt_cmn                                                                                                        # {Capture common (..._cmn) "host/storage" data for $host}
+
+adt_lun                                                                                                        # {Create host "LUN/Path" summary file}
+
+adt_sum                                                                                                        # {Perform final formatting and add header for Oracle "$summary" output file}
+
+adt_det                                                                                                        # {Perform final formatting and add header for Oracle "$details" output file}
+
+exit $rc                                                                                                       # {Exit main program}
+
+# End Main Program
