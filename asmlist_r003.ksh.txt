@@ -2,7 +2,7 @@
 
 ########################################################################################## (ASMLIST Utility) ##########################################################################################
 #                                                                                                                                                                                                     #
-#            Name:  asmlist_r003.ksh.txt                               {Modified: 04/08/20, Created: 01/05/18, Author: Bill Nunn}                                                                     #
+#            Name:  asmlist_r003.ksh.txt                               {Modified: 11/13/19, Created: 01/05/18, Author: Bill Nunn}                                                                     #
 #                                                                                                                                                                                                     #
 #        Overview:  ASMLIST utility is designed to run on a physical RHEL (RedHat Enterprise Linux) Oracle ASM RAC node provisioned with block storage managed by RHEL native multipath.              #
 #                   Utility uses "blkid" & "multipath -ll" commands & "kfed" ASM utility commands to correlate shared RAC ASM Disk names with corresponding LUN IDs and and should work               #
