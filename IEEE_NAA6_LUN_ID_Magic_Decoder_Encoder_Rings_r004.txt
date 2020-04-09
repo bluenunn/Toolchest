@@ -1,0 +1,427 @@
+
+File: IEEE_NAA6_LUN_ID_Magic_Decoder_Encoder_Rings_r004.txt          {Modified: 02/26/19, Created: 05/18/17, Author: Bill Nunn}
+
+Repository: https://github.com/bluenunn/Toolchest/
+
+Table Of Contents:
+
+     LUN ID Schemas:
+
+     Magic Rings:
+
+          <"EMC VMAX LUN ID Magic Decoder Ring">
+
+          <"EMC VMAX LUN ID Magic Encoder Ring">
+
+          <"Netapp LUN ID Magic Decoder Ring">
+
+          <"Netapp LUN ID Magic Encoder Ring">
+
+Overview:
+
+     Procedure describes LUNID schemas & "Magic Decoder/Encoder Rings" for DellEMC and Netapp SAN block storage arrays.
+
+LUN ID Schemas:
+
+     IEEE Standards Authority Links:
+
+          IEEE Standards Authority Product Services: https://standards.ieee.org/products-services/regauth/oui/index.html
+
+          IEEE OUI (Organizationally Unique Identifier) Repository: http://standards.ieee.org/develop/regauth/oui/oui.txt
+
+     Magic Ring Schemas:
+
+          EMC VMAX IEEE NAA6 LUN UUID decode (hex, 16 bytes):     {UUID (Universally Unique IDentifier)}
+
+               :--------------------------------------------------{x'6': indicates 16 byte IEEE NAA6 LUN UUID}
+               :
+               60000970000192604157533034433531
+               ||||||| ::::::::::::  ||||||||||
+               ||||||| ::::::::::::  ||||||||||---{x'3034433531':   VMAX Symdev (hex, 5 bytes), a'04C51' (ASCII, 5 chars), leading zero (Solutions Enabler >= 8x)}
+               ||||||| ::::::::::::---------------{x'000192604157': VMAX Array S/N (hex = dec (always 0-9), 12 digits, format: 000...)}
+               |||||||----------------------------{x'6000097...':   VMAX IEEE NAA6 LUN UUID format (hex, 16 bytes)}
+                ::::::----------------------------{x '000097':      VMAX IEEE OUI (hex, 3 bytes)}
+
+              *Note: EMC VMAX"2|3|AFA" IEEE assigned OUI is x'000097'.
+
+          NETAPP SAN (Data OnTap: 7Mode or cDOT) IEEE NAA6 LUN UUID decode (hex, 16 bytes):
+
+               <netid>0486e542d4f5a2f47694d684b
+               ||||||| ::::::::::::::::::::::::
+               ||||||| ::::::::::::::::::::::::---{x'486e542d4f5a2f47694d684b' Netapp LUN S/N (hex, 12 bytes), a'HnT-OZ/GiMhK' (ASCII, 12 chars, Netapp CLI "lun show -v")
+               |||||||
+               60a9800----------------------------{x'60a9800...': 7Mode IEEE NAA6 LUN UUID format (hex, 16 bytes)}
+               600a098----------------------------{x'600a098...'   cDOT IEEE NAA6 LUN UUID format (hex, 16 bytes)}
+                ::::::
+                ::::::----------------------------{x '0a9800':    7Mode IEEE OUI (hex, 3 bytes)}
+                ::::::----------------------------{x '00a098':     cDOT IEEE OUI (hex, 3 bytes)}
+
+Magic Rings:
+
+     <"EMC VMAX LUN ID Magic Decoder Ring">
+
+          Overview:  Tool decodes VMAX SN & Symdev for raw text input containing 16 byte VMAX LUN UUIDs (IEEE NAA6 format x'6000097...').
+                     By design, tool should work with any source text file with records (lines) containing a single EMC VMAX LUN UUID.
+
+          Syntax:
+
+                in=/tmp/test_mongodb_lunids_raw                                                       # {Tailor to point to  input file containing raw VMAX LUN_ID data}
+               out=/tmp/test_mongodb_lunids_fmt                                                       # {Tailor to point to output file containing formatted VMAX LUN_ID data}
+
+               pat_x06="[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]"     # {$pat_x06:       6 consecutive hex characters ( 3 bytes,   case insensitive)}
+               pat_x25="[[:xdigit:]]${pat_x06}${pat_x06}${pat_x06}${pat_x06}"                         # {$pat_x25:      25 consecutive hex characters (25 nibbles, case insensitive)}
+               pat_lun_vmax="6000097${pat_x25}"                                                       # {$pat_lun_vmax: 16 byte VMAX   LUN_ID (x'6000097...',      case insensitive)}
+
+               if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                # {Sun: set "nawk" (new awk), non-Sun (ex: RHEL, HP/UX): set "awk".}
+
+               $awk '$0~pat_lun_vmax{pos_id=match($0,pat_lun_vmax);id=substr($0,pos_id,32);sn=substr($0,pos_id+8,12);dev_x=substr($0,pos_id+22,10);dev_a=""
+                                     for (i=1; i<length(dev_x); i+=2) {dev_a=dev_a""sprintf("%c",strtonum("0x"substr(dev_x,i,2)))};printf("%-36s %-16s %s\n",id,sn,dev_a)}
+                    ' pat_lun_vmax="$pat_lun_vmax" $in |\
+               $awk 'BEGIN {print "\n          VMAX_LUN_ID                     SN          Symdev"
+                            print   "--------------------------------     ------------     ------"}
+                           {print $0};END {print ""}' > $out
+
+          Input ($in):                                # {raw LUN_ID data captured using "sandisk -l" utility}
+
+               mngdb-ccw-prd1-03:/tmp $ view $in
+               mpathk  360000970000192605987533034314639  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathj  360000970000192605987533034314539  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathh  360000970000192605987533034314631  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathg  360000970000192605987533034314531  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathi  360000970000192605987533034314431  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathe  360000970000192605987533034314339  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+               mpathf  360000970000192605987533034314439  #EMC  278528  ---  ---  ---  1,2  LVM  vgmongo  vgmongo
+
+          Output ($out):
+
+               mngdb-ccw-prd1-03:/tmp $ view $out     # {formatted LUN_ID data sorted by Symdev in column 3}
+
+               rcdn9-san-mgr1:/users/bnunn $ cat $out
+
+                         VMAX_LUN_ID                     SN          Symdev
+               --------------------------------     ------------     ------
+               60000970000192605987533034314639     000192605987     041F9
+               60000970000192605987533034314539     000192605987     041E9
+               60000970000192605987533034314631     000192605987     041F1
+               60000970000192605987533034314531     000192605987     041E1
+               60000970000192605987533034314431     000192605987     041D1
+               60000970000192605987533034314339     000192605987     041C9
+               60000970000192605987533034314439     000192605987     041D9
+
+     <"EMC VMAX LUN ID Magic Encoder Ring">
+
+          Overview:
+
+               Tool encodes full VMAX SN (12 digits, "000...") & Symdev pairs (5 chars) into 16 byte VMAX LUN IDs (IEEE NAA6 format x'6000097...').
+               "<VMAX_SN> <Symdev>" pair may be present anywhere within the record (only the first sequence within a given record is encoded).
+               8th nibble from left is encoded as a "0".  6th byte from the right is encoded as a "53" (ex: 6000097<0>000196801755<53>3030314344}.
+
+          Syntax:
+
+                in="vmax_sn_symdev"                                                     # {Sample input  format: "000196801755 001CD"}
+               out="vmax_lunid"                                                         # {Sample output format: "60000970000196801755533030314344"}
+
+               pat_sn="000[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]"                # {$pat_sn     pattern: full 12 digit VMAX SN ("000...")}
+               pat_symdev="[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"     # {$pat_symdev pattern: 5 hex characters ([0-9A-Fa-f]), case insensitive}
+
+               if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                  # {set "nawk" (Solaris) versus "awk" (non-Solaris)}
+
+               $awk 'NR==1 {table_hex_asc=tbl_hex_asc("0,255");naa_fmt="6";vmax_oui="000097";nib_0="0";byte_53="53";pat_sn_dev=pat_sn"[  ]+"pat_symdev}
+                           {if ($0~pat_sn_dev) {sub_rec=substr($0,match($0,pat_sn_dev));split(sub_rec,sub_rec_ary,FS);vmax_sn=sub_rec_ary[1]
+                                                symdev=sub_rec_ary[2];print naa_fmt""vmax_oui""nib_0""vmax_sn""byte_53""asc_to_hex(symdev)}}
+
+               function tbl_hex_asc (range) {table_hex_asc="";num_elem=split(range,ary_rng,",");beg=ary_rng[1];end=ary_rng[2]
+                                             for (i=beg;i<=end;i++) {byte_hex=sprintf("%02s",dec_to_hex(i))
+                                                                     table_hex_asc=sprintf("%sx%s_a%c,",table_hex_asc,byte_hex,i)}
+                                             return table_hex_asc}
+
+               function asc_to_hex (str) {str_hex="";str_asc=str
+                                          for (i=1;i<=length(str_asc);i++) {
+                                               char_asc=substr(str_asc,i,1)
+                                               char_hex=substr(table_hex_asc,index(table_hex_asc,"_a"char_asc)-2,2)
+                                               str_hex=str_hex""char_hex}
+                                          return str_hex}
+
+               function dec_to_hex (str) {str_dec=substr(str,match(str,"[0-9]"));b16_sub=1;b16_mod=16
+                                          str_hex="";if (str_dec ~ /^0+$/) {str_hex=0}
+                                          table_dec="0__1__2__3__4__5__6__7__8__9__10_11_12_13_14_15"
+                                          table_hex_lc="0123456789abcdef";table_hex_uc="0123456789ABCDEF"
+                                          table_hex=table_hex_lc;if (str ~ /^D/) {table_hex=table_hex_uc}
+                                          if (str_hex !=0) {
+                                               while (str_dec >0) {
+                                                    char_dec=str_dec%b16_mod/b16_sub
+                                                    idx_char_dec=index(table_dec,char_dec)
+                                                    idx_char_hex=(idx_char_dec-1)/3+1
+                                                    char_hex=substr(table_hex,idx_char_hex,1)
+                                                    str_dec=str_dec-(b16_sub*char_dec)
+                                                    b16_sub=16*b16_sub;b16_mod=16*b16_mod
+                                                    str_hex=char_hex""str_hex}}
+                                          return str_hex}
+
+                ' pat_sn="$pat_sn" pat_symdev="$pat_symdev" $in > $out
+
+          Input ($in):
+
+               000196801755 001C8
+               000196801755 001C9
+               000196801755 001CA
+               000196801755 001CB
+               000196801755 001CC
+
+          Output ($out):
+
+               60000970000196801755533030314338
+               60000970000196801755533030314339
+               60000970000196801755533030314341
+               60000970000196801755533030314342
+               60000970000196801755533030314343
+
+     <"Netapp LUN ID Magic Decoder Ring">
+
+          Overview:  Tool decodes Netapp SAN LUN SNs for raw text input containing 16 byte Netapp SAN LUN UUIDs (IEEE NAA6 format x'6[0a9800|00a098]...').
+                     By design, tool should work with any source text file with records (lines) containing a single Netapp SAN LUN UUID (7Mode or cDOT).
+                     The 12 ASCII char Netapp SAN LUN SNs returned by tool match the LUN SNs returned by OnTap "lun show -v" command (7Mode or cDOT).
+
+          Syntax:
+
+                in=/tmp/multi-ll_raw                                                                  # {Tailor to point to  input file containing raw Netapp SAN LUN_ID data}
+               out=/tmp/multi-ll_fmt                                                                  # {Tailor to point to output file containing formatted Netapp SAN LUN_ID data}
+
+               pat_x06="[[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]][[:xdigit:]]"     # {$pat_x06:       6 consecutive hex characters ( 3 bytes,   case insensitive)}
+               pat_x25="[[:xdigit:]]${pat_x06}${pat_x06}${pat_x06}${pat_x06}"                         # {$pat_x25:      25 consecutive hex characters (25 nibbles, case insensitive)}
+               pat_lun_7mde="60a9800${pat_x25}"                                                       # {$pat_lun_7mde: 16 byte Netapp SAN LUN_ID (x'60a9800...',  case insensitive)}
+               pat_lun_cdot="600a098${pat_x25}"                                                       # {$pat_lun_cdot: 16 byte Netapp SAN LUN_ID (x'600a098...',  case insensitive)}
+
+               if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                # {Sun: set "nawk" (new awk), non-Sun (ex: RHEL, HP/UX): set "awk".}
+
+               $awk '$0~pat_lun_7mde||$0~pat_lun_cdot{ontap="7Mode";pat_lun_match=pat_lun_7mde;if ($0~pat_lun_cdot) {ontap="cDOT";pat_lun_match=pat_lun_cdot}
+                                                      pos_id=match($0,pat_lun_match);id=substr($0,pos_id,32);dev_x=substr($0,pos_id+8,24);dev_a=""
+                                                      for (i=1; i<length(dev_x); i+=2) {dev_a=dev_a""sprintf("%c",strtonum("0x"substr(dev_x,i,2)))};printf("%-9s %-36s %s\n",ontap,id,dev_a)}
+                    ' pat_lun_7mde="$pat_lun_7mde" pat_lun_cdot="$pat_lun_cdot" $in |\
+               $awk 'BEGIN {print "\nOnTap               Netapp_LUN_ID                 LUN_SN"
+                            print   "-----     --------------------------------     ------------"}
+                           {print $0};END {print ""}' > $out
+
+          Input ($in):
+
+               oraNPRPPRD_data_025_8600M (360a9800041764130695d436c47464169) dm-44 NETAPP,LUN
+               [size=68G][features=1 queue_if_no_path][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 4:0:1:8  sdbs 68:96   [active][ready]
+                \_ 1:0:0:8  sdfo 130:160 [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 8:0:0:8  sdcr 69:240  [active][ready]
+                \_ 5:0:1:8  sdka 65:480  [active][ready]
+               oraNPRPPRD_data_025_8600M (360a9800041764130695d436c47464169) dm-44 NETAPP,LUN
+               [size=68G][features=1 queue_if_no_path][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 4:0:1:8  sdbs 68:96   [active][ready]
+                \_ 1:0:0:8  sdfo 130:160 [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 8:0:0:8  sdcr 69:240  [active][ready]
+                \_ 5:0:1:8  sdka 65:480  [active][ready]
+               mpath129 (3600a098041765866655d4462644d5a32) dm-52 NETAPP,LUN C-Mode
+               [size=272G][features=3 queue_if_no_path pg_init_retries 50][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 3:0:1:23 sdms 70:320  [active][ready]
+                \_ 4:0:2:23 sdwu 70:672  [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 2:0:0:23 sdcm 69:160  [active][ready]
+               <...>
+                \_ 3:0:0:23 sdqx 133:272 [active][ready]
+               mpath114 (3600a09804176567a452b444c48587662) dm-32 NETAPP,LUN C-Mode
+               [size=272G][features=3 queue_if_no_path pg_init_retries 50][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 1:0:0:8  sdj  8:144   [active][ready]
+                \_ 2:0:0:8  sdbg 67:160  [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 4:0:0:8  sdik 135:64  [active][ready]
+               <...>
+                \_ 3:0:0:8  sdnl 71:368  [active][ready]
+               mpath146 (3600a09804176567a452b444c4858766a) dm-15 NETAPP,LUN C-Mode
+               [size=8.0G][features=3 queue_if_no_path pg_init_retries 50][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 2:0:0:40 sdej 128:176 [active][ready]
+                \_ 1:0:0:40 sdap 66:144  [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 4:0:0:40 sdne 71:256  [active][ready]
+               <...>
+                \_ 3:0:0:40 sdui 66:672  [active][ready]
+               mpath131 (3600a09804176567a503f44496d33754b) dm-0 NETAPP,LUN C-Mode
+               [size=272G][features=3 queue_if_no_path pg_init_retries 50][hwhandler=1 alua][rw]
+               \_ round-robin 0 [prio=50][active]
+                \_ 4:0:0:25 sdkz 67:368  [active][ready]
+                \_ 3:0:2:25 sdty 66:512  [active][ready]
+               \_ round-robin 0 [prio=10][enabled]
+                \_ 1:0:0:25 sdaa 65:160  [active][ready]
+               <...>
+                \_ 3:0:0:25 sdrj 133:464 [active][ready]
+
+          Output ($out):
+
+               OnTap             Netapp_LUN_ID                   LUN_SN
+               -----     --------------------------------     ------------
+               7Mode     60a9800041764130695d436c47464169     AvA0i]ClGFAi
+               7Mode     60a9800041764130695d436c47464169     AvA0i]ClGFAi
+               cDOT      600a098041765866655d4462644d5a32     AvXfe]DbdMZ2
+               cDOT      600a09804176567a452b444c48587662     AvVzE+DLHXvb
+               cDOT      600a09804176567a452b444c4858766a     AvVzE+DLHXvj
+               cDOT      600a09804176567a503f44496d33754b     AvVzP?DIm3uK
+
+     <"Netapp LUN ID Magic Encoder Ring">
+
+          Overview:
+
+               Tool encodes full 16 byte LUN ID for Netapp SAN LUNs (7-Mode & cDOT) using input from Data OnTap "lun show -v" command.
+
+          Syntax:
+
+                in="nasan_lun_show-v"                                           # {Tailor for Netapp SAN "lun show -v" input file}
+               out="nasan_lun_show-v_fmt1"                                      # {Tailor for formatted Netapp SAN "lun show -v" output file}
+
+               if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi          # {set "nawk" (Solaris) versus "awk" (non-Solaris)}
+
+               $awk 'function tbl_hex_asc (range) {table_hex_asc="";num_elem=split(range,ary_rng,",");beg=ary_rng[1];end=ary_rng[2]
+                                                   for (i=beg;i<=end;i++) {byte_hex=sprintf("%02s",dec_to_hex(i))
+                                                                           table_hex_asc=sprintf("%sx%s_a%c,",table_hex_asc,byte_hex,i)}
+                                                   return table_hex_asc}
+
+                     function asc_to_hex (str) {str_hex="";str_asc=str
+                                                for (i=1;i<=length(str_asc);i++) {
+                                                     char_asc=substr(str_asc,i,1)
+                                                     char_hex=substr(table_hex_asc,index(table_hex_asc,"_a"char_asc)-2,2)
+                                                     str_hex=str_hex""char_hex}
+                                                return str_hex}
+
+                     function dec_to_hex (str) {str_dec=substr(str,match(str,"[0-9]"));b16_sub=1;b16_mod=16
+                                                str_hex="";if (str_dec ~ /^0+$/) {str_hex=0}
+                                                table_dec="0__1__2__3__4__5__6__7__8__9__10_11_12_13_14_15"
+                                                table_hex_lc="0123456789abcdef";table_hex_uc="0123456789ABCDEF"
+                                                table_hex=table_hex_lc;if (str ~ /^D/) {table_hex=table_hex_uc}
+                                                if (str_hex !=0) {
+                                                     while (str_dec >0) {
+                                                          char_dec=str_dec%b16_mod/b16_sub
+                                                          idx_char_dec=index(table_dec,char_dec)
+                                                          idx_char_hex=(idx_char_dec-1)/3+1
+                                                          char_hex=substr(table_hex,idx_char_hex,1)
+                                                          str_dec=str_dec-(b16_sub*char_dec)
+                                                          b16_sub=16*b16_sub;b16_mod=16*b16_mod
+                                                          str_hex=char_hex""str_hex}}
+                                                return str_hex}
+
+                     BEGIN {filer="-";mode="-";oui="-";naa_fmt="6";nib_0="0"
+                            lun_path="-";lun_id;lun_sn="-";lun_size="-";lun_occ="-";os_typ="-";mapped="-"
+                            spc_rsv="-";cre_yr="-";cre_mo="-";cre_dy="-";cre_dt="-";cre_tm="-";cre_zn="-"}
+
+                     NR==1 {table_hex_asc=tbl_hex_asc("0,255")}
+
+                     $1=="Filer:"{if (NF>1) {filer=$2}}
+                     /Vserver Name:/{if (filer=="-") {filer=$3}}
+                     /\/vol\//{if ($1~/\/vol\//) {mode="7-Mode";oui="0a9800";lun_path=$1;lun_size=$2;if ($NF~/mapped/) {mapped="mapped"}}
+                               if ($3~/\/vol\//) {mode="cDOT";oui="00a098"}}
+                     $0~/LUN Path:/{lun_path=$NF}
+                     $0~/LUN Size:/{lun_size=$NF}
+                     $1~/Serial#:/ || $0~/Serial Number:/{lun_sn=$NF}
+                     $1~/Mapped:/{mapped="-";if (NF > 1) {mapped=$NF}}
+                     $0~/Space Reservation:/{spc_rsv=$NF}
+                     $0~/Multiprotocol Type:/ || $0~/OS Type:/{os_typ=$NF}
+                     $0~/Occupied Size:/{lun_occ=$3}
+                     $0~/Creation Time:/{if (mode=="7-Mode") {sub(/Jan/,"01",$4);sub(/Feb/,"02",$4);sub(/Mar/,"03",$4);sub(/Apr/,"04",$4)
+                                                              sub(/May/,"05",$4);sub(/Jun/,"06",$4);sub(/Jul/,"07",$4);sub(/Aug/,"08",$4)
+                                                              sub(/Sep/,"09",$4);sub(/Oct/,"10",$4);sub(/Nov/,"11",$4);sub(/Dec/,"12",$4)
+
+                                                              cre_yr=$NF;cre_mo=$4;cre_dy=sprintf("%02s",$5)
+                                                              cre_dt=cre_yr"_"cre_mo"-"cre_dy;cre_tm=$6;cre_zn="-";if (NF==8) {cre_zn=$7}}
+
+                                         if (mode=="cDOT")   {split($3,date,"/");cre_yr=date[3];cre_mo=sprintf("%02s",date[1]);cre_dy=sprintf("%02s",date[2])
+                                                              cre_dt=cre_yr"_"cre_mo"-"cre_dy;cre_tm=$4;cre_zn="-";if (NF==5) {cre_zn=$5}}
+
+                                         lun_id=naa_fmt""oui""nib0""asc_to_hex(lun_sn)
+                                         print mode,filer,os_typ,lun_path,lun_id,lun_sn,lun_size,lun_occ,mapped,spc_rsv,cre_dt,cre_tm,cre_zn}
+
+                    ' $in | sort -k4 |\
+
+               $awk 'BEGIN {print "Mode Filer OS_Type LUN_Path LUN_ID LUN_SN LUN_Size LUN_Occ Mapped Spc_Rsv Cre_Date Cre_Time Cre_Zone"}
+                           {print $0}' | column -t > $out
+
+          Input ($in):
+
+               7-Mode:
+
+                         Filer: rtp1-na-san19a              # {Optional, add 7-Mode LUN ownership filer to start of data (default: "-")}
+
+                         /vol/ASM10DEV_DT01_1/ASM10DEV_DT01_001/ASM10DEV_DT01_136G_001  136.2g (146209243136)  (r/w, online, mapped)
+                                 Serial#: Av0bM]CH-Jsn
+                                 Share: none
+                                 Space Reservation: disabled
+                                 Multiprotocol Type: linux
+                                 Maps: IG_LNXDB_IDEV4_04-05_Shared=0
+                                 Occupied Size:    2.0m (2138112)
+                                 Creation Time: Thu May  1 19:20:39 EDT 2014
+                                 Cluster Shared Volume Information: 0x0
+                         <...>
+
+               cDOT:
+
+                         Filer: rtp1-c001-san-esx01     # {Optional, add cDOT LUN ownership node to start of data (default: "<vserver_name>")}
+
+                                        Vserver Name: rtp1-c001-san-esx01
+                                            LUN Path: /vol/C001_N01_DP_RTP1_VIF7_DT01_1/DP_NON-ERMO_VM-B05_001/DP-NPRD7-VM-B05_2002G_001
+                                         Volume Name: C001_N01_DP_RTP1_VIF7_DT01_1
+                                          Qtree Name: DP_NON-ERMO_VM-B05_001
+                                            LUN Name: DP-NPRD7-VM-B05_2002G_001
+                                            LUN Size: 1.96TB
+                                             OS Type: vmware
+                                   Space Reservation: disabled
+                                       Serial Number: AvVzL?EWgpy3
+                                             Comment:
+                          Space Reservations Honored: true
+                                    Space Allocation: disabled
+                                               State: online
+                                            LUN UUID: 23b80406-a759-425f-8100-154dc390fe1e
+                                              Mapped: mapped
+                                          Block Size: 512
+                                    Device Legacy ID: -
+                                    Device Binary ID: -
+                                      Device Text ID: -
+                                           Read Only: false
+                         Inaccessible Due to Restore: false
+                                           Used Size: 0
+                                 Maximum Resize Size: 15.97TB
+                                       Creation Time: 6/3/2014 13:42:56
+                                               Class: regular
+                                               Clone: false
+                            Clone Autodelete Enabled: false
+                                    QoS Policy Group: -
+                         <...>
+
+          Output ($out):
+
+               7-Mode:
+
+                    Mode    Filer           OS_Type  LUN_Path                                                           LUN_ID                           LUN_SN        LUN_Size  LUN_Occ  Mapped  Spc_Rsv  Cre_Date    Cre_Time  Cre_Zone
+                    7-Mode  svldr-filer02a  linux    /vol/ACI/ACI_test1                                                 60a98004175794b6e5d43653273584f  AuyKn]Ce2sXO  2t        1.3t     mapped  enabled  2014_05-01  01:24:24  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/ACI/ACI_test2                                                 60a98004175794b6e5d436532735851  AuyKn]Ce2sXQ  2t        1.2t     mapped  enabled  2014_05-01  01:24:37  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/ACI/ACI_test3                                                 60a98004175794b6e5d436532735853  AuyKn]Ce2sXS  2t        515.4g   mapped  enabled  2014_05-01  01:24:37  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/ACI/ACI_test4                                                 60a98004175794b6e5d436532735855  AuyKn]Ce2sXU  2t        693.3g   mapped  enabled  2014_05-01  01:30:33  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/AM12CPOC_DT01_1/AM12CPOC_DT01_1_001/AM12CPOC_DT01_1_272G_001  60a98004175794b6e5d436532734c64  AuyKn]Ce2sLd  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:21  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/AM12CPOC_DT01_1/AM12CPOC_DT01_1_003/AM12CPOC_DT01_1_272G_003  60a98004175794b6e5d436532734c66  AuyKn]Ce2sLf  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:21  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/AM12CPOC_DT01_1/AM12CPOC_DT01_1_005/AM12CPOC_DT01_1_272G_005  60a98004175794b6e5d436532734c68  AuyKn]Ce2sLh  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:22  GMT
+                    7-Mode  svldr-filer02a  linux    /vol/AM12CPOC_DT01_1/AM12CPOC_DT01_1_007/AM12CPOC_DT01_1_272G_007  60a98004175794b6e5d436532734c6a  AuyKn]Ce2sLj  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:22  GMT
+                    <...>
+                    7-Mode  svldr-filer02b  linux    /vol/AM12CPOC_DT02_1/AM12CPOC_DT01_1_002/AM12CPOC_DT01_1_272G_002  60a980041757971515d436532734a65  AuyqQ]Ce2sJe  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:27  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/AM12CPOC_DT02_1/AM12CPOC_DT01_1_004/AM12CPOC_DT01_1_272G_004  60a980041757971515d436532734a67  AuyqQ]Ce2sJg  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:27  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/AM12CPOC_DT02_1/AM12CPOC_DT01_1_006/AM12CPOC_DT01_1_272G_006  60a980041757971515d436532734a69  AuyqQ]Ce2sJi  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:28  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/AM12CPOC_DT02_1/AM12CPOC_DT01_1_008/AM12CPOC_DT01_1_272G_008  60a980041757971515d436532734a6b  AuyqQ]Ce2sJk  272.3g    211.9g   mapped  enabled  2013_12-23  21:43:28  GMT
+                    <...>
+                    7-Mode  svldr-filer02b  linux    /vol/Delphix_SAN/Delphix_esx1                                      60a980041757971515d436532735771  AuyqQ]Ce2sWq  1.0t      1004.0g  mapped  enabled  2014_06-19  22:34:12  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/Delphix_SAN/Delphix_esx2                                      60a980041757971515d436532735773  AuyqQ]Ce2sWs  1.0t      1004.0g  mapped  enabled  2014_06-19  22:34:18  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/Delphix_SAN/Delphix_esx3                                      60a980041757971515d436532735775  AuyqQ]Ce2sWu  1.0t      1.0t     mapped  enabled  2014_06-19  22:34:21  GMT
+                    7-Mode  svldr-filer02b  linux    /vol/Delphix_SAN/Delphix_esx4                                      60a980041757971515d436532735777  AuyqQ]Ce2sWw  1.0t      1007.9g  mapped  enabled  2014_06-19  22:34:59  GMT
+                    <...>
+
+               cDOT:
+
+                    Mode  Filer                    OS_Type  LUN_Path                                                                            LUN_ID                           LUN_SN        LUN_Size  LUN_Occ  Mapped  Spc_Rsv   Cre_Date    Cre_Time  Cre_Zone
+                    cDOT  rtp1-c001-san-esx01-n01  vmware   /vol/C001_N01_DP_RTP1_VIF7_DT01_1/DP_NON-ERMO_VM-B05_001/DP-NPRD7-VM-B05_2002G_001  600a0984176567a4c3f455767707933  AvVzL?EWgpy3  1.96TB    -        mapped  disabled  2014_06-03  13:42:56  -
+                    <...>
