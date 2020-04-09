@@ -1,0 +1,217 @@
+
+File: mds_port-channel_audit_proc_r007.txt             {Modified: 03/03/20, Created: 02/10/20, Author Bill Nunn}
+
+Repository: https://github.com/bluenunn/Toolchest/
+
+Overview:
+
+     Sample OZ101 MDS Port-Channel audit procedure for MDS "oz101-san-dw[12]/sw[12]".
+
+     Appendix outlines process for creating MDS Port-Channel table ($fmt) referenced in "Summary/Details" sections of document.
+
+Summary:
+
+     oz101-san-mgr1:/tmp $ awk '{sw_pc=$1;split (sw_pc,ary_sw_pc,":");print ary_sw_pc[1]}' sw_pc_${env} | sort -k1 | uniq -c     # {audit list MDS PC interface distribution}
+          24 oz101-san-dw1
+          24 oz101-san-dw2
+           1 oz101-san-sw1
+           1 oz101-san-sw2   
+
+     oz101-san-mgr1:/tmp $ awk '$2~/port-channel/' $fmt | wc -l      # {Verify <#> Port-Channel interfaces in MDS PC table ($fmt) matches audit list}
+     50
+
+Details:
+
+     $1              $2               $3    $4       $5     $6                                            $7       $8          $9                           $10
+     Switch          Port-Channel     Mode  Speed    #_mem  Description                                   VSAN_PC  VSAN_allow  PC_members                   PC_members_status
+     oz101-san-dw1   port-channel12   TF    32_Gbps  4      PC_12_OZ101-DCI07N-UCS10-A_OZ101-SAN-DW1      1        (1,3120)    fc1/32,fc2/32,fc3/3,fc3/32   [up],[up],[up],[up]
+     oz101-san-dw1   port-channel14   TF    32_Gbps  4      PC_14_OZ101-DCI07N-UCS11-A_OZ101-SAN-DW1      1        (1,3120)    fc1/36,fc2/36,fc3/11,fc3/36  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel16   TF    32_Gbps  4      PC_16_OZ101-FAB1-109-UCS02-A_OZ101-SAN-DW1    1        (1,3120)    fc1/34,fc1/39,fc2/14,fc3/7   [up],[up],[up],[up]
+     oz101-san-dw1   port-channel18   -     -        4      PC_18_OZ101-FAB1-110-UCS01-A_OZ101-SAN-DW1    1        -           fc1/42,fc2/16,fc2/18,fc3/12  [down],[down],[down],[down]
+     oz101-san-dw1   port-channel20   -     -        4      PC_20_OZ101-DCI07N-UCS20-A_OZ101-SAN-DW1      1        -           fc1/17,fc2/17,fc3/9,fc3/17   [down],[down],[down],[down]
+     oz101-san-dw1   port-channel22   TF    32_Gbps  4      PC_22_OZ101-DCI07N-UCS12-A_OZ101-SAN-DW1      1        (1,3120)    fc1/44,fc2/20,fc2/44,fc3/44  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel24   F     64_Gbps  4      PC_24_OZ101-DCI07N-UCS18-A_OZ101-SAN-DW1      1        -           fc1/21,fc2/21,fc2/41,fc3/21  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel26   TF    64_Gbps  4      PC_26_OZ101-DCI07N-UCS19-A_OZ101-SAN-DW1      1        (1,3120)    fc1/25,fc2/40,fc2/42,fc3/40  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel32   TF    32_Gbps  4      PC_32_OZ101-FAB1-UCS01-101-A_OZ101-SAN-DW1    1        (1,3120)    fc1/45,fc2/23,fc3/15,fc3/45  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel34   TF    32_Gbps  4      PC_34_OZ101-FAB1-UCS01-102-A_OZ101-SAN-DW1    1        (1,3120)    fc1/46,fc2/30,fc3/16,fc3/46  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel36   TF    32_Gbps  4      PC_36_OZ101-FAB1-UCS01-103-A_OZ101-SAN-DW1    1        (1,3120)    fc1/47,fc2/34,fc3/18,fc3/47  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel38   TF    32_Gbps  4      PC_38_OZ101-FAB1-UCS01-104-A_OZ101-SAN-DW1    1        (1,3120)    fc1/48,fc2/39,fc3/20,fc3/48  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel40   TF    32_Gbps  4      PC_40_OZ101-DCI07N-UCS22-A_OZ101-SAN-DW1      1        (1,3120)    fc1/15,fc1/26,fc2/15,fc3/28  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel50   TF    32_Gbps  4      PC_50_OZ101-DCI07N-UCS23-A_OZ101-SAN-DW1      1        (1,3120)    fc1/29,fc2/25,fc2/29,fc3/29  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel60   TF    32_Gbps  4      PC_60_OZ101-DCI07N-UCS24-A_OZ101-SAN-DW1      1        (1,3120)    fc1/33,fc2/33,fc3/25,fc3/33  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel70   TF    32_Gbps  4      PC_70_OZ101-FAB1-106-UCS04-A_OZ101-SAN-DW1    1        (1,3120)    fc1/37,fc1/41,fc2/37,fc3/37  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel80   TF    32_Gbps  4      PC_80_OZ101-DCI07N-UCS25-A_OZ101-SAN-DW1      1        (1,3120)    fc1/6,fc1/14,fc2/6,fc3/6     [up],[up],[up],[up]
+     oz101-san-dw1   port-channel90   TF    32_Gbps  4      PC_90_OZ101-DCI07N-UCS26-A_OZ101-SAN-DW1      1        (1,3120)    fc1/20,fc1/43,fc2/43,fc3/43  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel110  TE    64_Gbps  4      PC_110_OZ101-SAN-DW1_OZ101-SAN-SW1            1        (1,3120)    fc1/1,fc1/2,fc2/1,fc3/1      [up],[up],[up],[up]
+     oz101-san-dw1   port-channel120  -     -        4      PC_120_OZ101-FAB1-109-UCS01-A_OZ101-SAN-DW1   1        -           fc1/31,fc2/27,fc2/31,fc3/27  [down],[down],[down],[down]
+     oz101-san-dw1   port-channel130  TF    32_Gbps  4      PC_130_OZ101-FAB1-107-UCS02-A_oz101-san-dw1   1        (1,3120)    fc1/35,fc2/35,fc3/31,fc3/35  [up],[up],[up],[up]
+     oz101-san-dw1   port-channel150  -     -        4      PC_150_OZ101-FAB1-107-UCS03-A_OZ101-SAN-DW1   1        -           fc1/19,fc1/27,fc2/19,fc3/19  [down],[down],[down],[down]
+     oz101-san-dw1   port-channel160  -     -        4      PC_160_OZ101-DCI07N-UCS06-A_OZ101-SAN-DW1     1        -           fc1/22,fc1/23,fc2/22,fc3/22  [down],[down],[down],[down]
+     oz101-san-dw1   port-channel180  -     -        4      PC_180_OZ101-DCI07N-UCS07-A_OZ101-SAN-DW1     1        -           fc1/38,fc2/38,fc3/24,fc3/38  [down],[down],[down],[down]
+     oz101-san-dw2   port-channel13   TF    32_Gbps  4      PC_13_OZ101-DCI07N-UCS10-B_OZ101-SAN-DW2      1        (1,3121)    fc1/32,fc2/32,fc3/3,fc3/32   [up],[up],[up],[up]
+     oz101-san-dw2   port-channel15   TF    32_Gbps  4      PC_15_OZ101-DCI07N-UCS11-B_OZ101-SAN-DW2      1        (1,3121)    fc1/36,fc2/36,fc3/11,fc3/36  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel17   TF    32_Gbps  4      PC_17_OZ101-FAB1-109-UCS02-B_OZ101-SAN-DW2    1        (1,3121)    fc1/34,fc1/39,fc2/14,fc3/7   [up],[up],[up],[up]
+     oz101-san-dw2   port-channel19   TF    32_Gbps  4      PC_19_OZ101-FAB1-110-UCS01-B_OZ101-SAN-DW2    1        (1,3121)    fc1/42,fc2/16,fc2/18,fc3/12  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel21   -     -        4      PC_21_OZ101-DCI07N-UCS20-B_OZ101-SAN-DW2      1        -           fc1/17,fc2/17,fc3/9,fc3/17   [down],[down],[down],[down]
+     oz101-san-dw2   port-channel23   TF    32_Gbps  4      PC_23_OZ101-DCI07N-UCS12-B_OZ101-SAN-DW2      1        (1,3121)    fc1/44,fc2/20,fc2/44,fc3/44  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel25   F     64_Gbps  4      PC_25_OZ101-DCI07N-UCS18-B_oz101-san-dw2      1        -           fc1/4,fc2/4,fc2/41,fc3/4     [up],[up],[up],[up]
+     oz101-san-dw2   port-channel27   TF    64_Gbps  4      PC_27_OZ101-DCI07N-UCS19-B_oz101-san-dw2      1        (1,3121)    fc1/18,fc2/40,fc2/42,fc3/40  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel33   TF    32_Gbps  4      PC_33_OZ101-FAB1-UCS01-101-B_OZ101-SAN-DW2    1        (1,3121)    fc1/45,fc2/23,fc3/15,fc3/45  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel35   TF    32_Gbps  4      PC_35_OZ101-FAB1-UCS01-102-B_OZ101-SAN-DW2    1        (1,3121)    fc1/46,fc2/30,fc3/16,fc3/46  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel37   TF    32_Gbps  4      PC_37_OZ101-FAB1-UCS01-103-B_OZ101-SAN-DW2    1        (1,3121)    fc1/47,fc2/34,fc3/18,fc3/47  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel39   TF    32_Gbps  4      PC_39_OZ101-FAB1-UCS01-104-B_OZ101-SAN-DW2    1        (1,3121)    fc1/48,fc2/39,fc3/20,fc3/48  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel41   TF    32_Gbps  4      PC_41_OZ101-DCI07N-UCS22-B_OZ101-SAN-DW2      1        (1,3121)    fc1/21,fc1/25,fc2/21,fc3/21  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel51   TF    32_Gbps  4      PC_51_OZ101-DCI07N-UCS23-B_OZ101-SAN-DW2      1        (1,3121)    fc1/29,fc2/25,fc2/29,fc3/29  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel61   TF    32_Gbps  4      PC_61_OZ101-DCI07N-UCS24-B_OZ101-SAN-DW2      1        (1,3121)    fc1/33,fc2/33,fc3/25,fc3/33  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel71   TF    32_Gbps  4      PC_71_OZ101-FAB1-106-UCS04-B_OZ101-SAN-DW2    1        (1,3121)    fc1/37,fc1/41,fc2/37,fc3/37  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel81   TF    32_Gbps  4      PC_81_OZ101-DCI07N-UCS25-B_OZ101-SAN-DW2      1        (1,3121)    fc1/6,fc1/14,fc2/6,fc3/6     [up],[up],[up],[up]
+     oz101-san-dw2   port-channel91   TF    32_Gbps  4      PC_91_OZ101-DCI07N-UCS26-B_OZ101-SAN-DW2      1        (1,3121)    fc1/20,fc1/43,fc2/43,fc3/43  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel111  TE    64_Gbps  4      PC_111_OZ101-SAN-DW2_OZ101-SAN-SW2            1        (1,3121)    fc1/1,fc1/2,fc2/1,fc3/1      [up],[up],[up],[up]
+     oz101-san-dw2   port-channel121  -     -        4      PC_121_OZ101-FAB1-109-UCS01-B_OZ101-SAN-DW2   1        -           fc1/31,fc2/27,fc2/31,fc3/27  [down],[down],[down],[down]
+     oz101-san-dw2   port-channel131  TF    32_Gbps  4      PC_131_OZ101-FAB1-107-UCS02-B_OZ101-SAN-DW2   1        (1,3121)    fc1/35,fc2/35,fc3/31,fc3/35  [up],[up],[up],[up]
+     oz101-san-dw2   port-channel151  -     -        4      PC_151_OZ101-FAB1-107-UCS03-B_OZ101-SAN-DW2   1        -           fc1/19,fc1/27,fc2/19,fc3/19  [down],[down],[down],[down]
+     oz101-san-dw2   port-channel161  -     -        4      PC_161_OZ101-DCI07N-UCS06-B_OZ101-SAN-DW2     1        -           fc1/22,fc1/23,fc2/22,fc3/22  [down],[down],[down],[down]
+     oz101-san-dw2   port-channel181  -     -        4      PC_181_OZ101-DCI07N-UCS07-B_OZ101-SAN-DW2     1        -           fc1/38,fc2/38,fc3/24,fc3/38  [down],[down],[down],[down]
+     oz101-san-sw1   port-channel110  TE    64_Gbps  4      PC_110_oz101-san-dw1_oz101-san-sw1            1        (1,3120)    fc1/1,fc1/2,fc2/1,fc3/1      [up],[up],[up],[up]
+     oz101-san-sw2   port-channel111  TE    64_Gbps  4      PC_111_oz101-san-dw2_oz101-san-sw2            1        (1,3121)    fc1/1,fc1/2,fc2/1,fc3/1      [up],[up],[up],[up]
+
+Appendix:
+
+     TOC:
+
+          <"collect/format" OZ101 raw MDS PC (Port-Channel) Data>
+
+     Contents:
+
+          <"collect/format" OZ101 raw MDS PC (Port-Channel) Data>
+
+               Collect Data:          {"admin@oz101-san-mgr1": use trusted MDS "<ID>@<host>" pair}
+
+                    # Run Steps 01, 02, 03 on trusted MDS management <ID@host> session.
+
+                    Step 01) - Define MDS environment variable & create MDS switch list:
+
+                         env=oz101             # {Tailor MDS env. var., ex: env=oz101}
+
+                         <edit> mds_${env}     # {Edit single column MDS switch audit file}
+
+                              oz101-san-mgr1:/tmp $ view mds_${env}
+                              oz101-san-dw1
+                              oz101-san-dw2
+                              oz101-san-sw1
+                              oz101-san-sw2
+
+                    Step 02) - Create MDS "<switch>:<port-channel>" pairs file (":" delimited):
+
+                         for mds in $(cat mds_${env});do
+
+                              ssh -q $mds "show int br" |\
+                              awk '$1~/^port-channel[0-9]+$/ {pc=$1;print mds":"pc}' mds="$mds"
+
+                         done > sw_pc_${env}
+
+                              oz101-san-mgr1:/tmp $ wc -l sw_pc_${env}
+                              50 sw_pc_oz101
+
+                              oz101-san-mgr1:/tmp $ view sw_pc_${env}
+                              oz101-san-dw1:port-channel12
+                              oz101-san-dw1:port-channel14
+                              <...>
+                              oz101-san-dw1:port-channel160
+                              oz101-san-dw1:port-channel180
+                              oz101-san-dw2:port-channel13
+                              oz101-san-dw2:port-channel15
+                              <...>
+                              oz101-san-dw2:port-channel161
+                              oz101-san-dw2:port-channel181
+                              oz101-san-sw1:port-channel110
+                              oz101-san-sw2:port-channel111
+
+                    Step 03) - Capture raw MDS <port-channel> data:
+
+                         for sw_pc in $(cat sw_pc_${env});do
+
+                              sw=$(echo "$sw_pc" | awk '{split($1,ary_sw_pc,":");print ary_sw_pc[1]}')
+
+                              pc=$(echo "$sw_pc" | awk '{split($1,ary_sw_pc,":");print ary_sw_pc[2]}')
+
+                              echo "MDS: $sw"
+
+                              ssh -q $sw "show int $pc"
+
+                         done > ${env}_show-int-pc_$(date '+%Y-%m-%d_%Z')
+
+                         ls -lrt ${env}_show-int-pc_* | tail -1
+
+                              oz101-san-mgr1:/tmp $ ls -lrt ${env}_show-int-pc_* | tail -1
+                              -rw-r--r--. 1 admin oz101 56130 Feb 10 04:33 oz101_show-int-pc_2020-02-10_GMT
+
+               Format Data:
+
+                    # Tailor "$dir/$raw/$fmt" & "copy/paste" onto Unix style host to create MDS Port-Channel table ($fmt).
+
+                    dir=/tmp/                                           # {"$dir":  Tailor raw data staging dir, include trailing "/"}
+
+                    raw=${dir}oz101_show-int-pc_2020-02-10_GMT          # {"$raw":  Tailor raw MDS Port-Channel input file}
+                    fmt=${raw}_fmt                                      # {"$fmt":  Tailor formatted MDS Port-Channel table}
+
+                    awk                    'BEGIN {
+                                                   fnd_mds=0
+                                                   print "$1     $2           $3   $4    $5    $6          $7      $8         $9         $10"
+                                                   print "Switch Port-Channel Mode Speed #_mem Description VSAN_PC VSAN_allow PC_members PC_members_status"
+                                                  }
+                                       $1=="MDS:" {
+                                                   fnd_mds=1
+                                                   sw=$2
+                                                  }
+                               $0~/^port-channel/ {
+                                                   pc=$1
+                                                   cnt_mem=0
+                                                   desc="-"
+                                                   wwn="-"
+                                                   mode="-"
+                                                   speed="-"
+                                                   vsan_port="-"
+                                                   vsan_allow="-"
+                                                   vsan_up="-"
+                                                  }
+                         $0~/Port description is/ {
+                                                   desc=substr($0,25)
+                                                   gsub(/[[:blank:]]+/,"_",desc)
+                                                   sub(/^_/,"",desc)
+                                                   sub(/_$/,"",desc)
+                                                  }
+                                 $0~/Port WWN is/ {wwn=$4}
+                                $0~/Port mode is/ {mode=$4}
+                                $0~/Port vsan is/ {vsan_port=$4}
+                                    $0~/Speed is/ {speed=$3"_"$4}
+                         $0~/Trunk vsans \(admin/ {vsan_allow=$NF}
+                           $0~/Trunk vsans \(up)/ {vsan_up=$NF}
+                                     $1~/^Member/ {
+                                                   ++cnt_mem
+                                                   ary_pc_mem[cnt_mem]=$3
+                                                   ary_pc_sts[cnt_mem]=$4
+                                                  }
+                                          $0~/^$/ {
+                                                   if (fnd_mds==1) {
+                                                                    if (cnt_mem==0) {
+                                                                                     pc_mem="<no_PC_members>"
+                                                                                     pc_sts="-"
+                                                                                    }
+                                                                    else            {
+                                                                                     for (m=1;m<=cnt_mem;m++) {
+                                                                                                               if (m==1) {
+                                                                                                                          pc_mem=ary_pc_mem[m]
+                                                                                                                          pc_sts=ary_pc_sts[m]
+                                                                                                                         }
+                                                                                                               if (m >1) {
+                                                                                                                          pc_mem=pc_mem","ary_pc_mem[m]
+                                                                                                                          pc_sts=pc_sts","ary_pc_sts[m]
+                                                                                                                         }
+                                                                                                              }
+                                                                                    }
+                                                                    print sw,pc,mode,speed,cnt_mem,desc,vsan_port,vsan_allow,pc_mem,pc_sts
+                                                                   }
+                                                   fnd_mds=0
+                                                  }
+                                              END {print ""}' $raw | column -t | awk 'BEGIN {print ""};{print $0};END {print ""}'> $fmt
