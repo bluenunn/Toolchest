@@ -1,0 +1,320 @@
+#!/bin/ksh
+
+####################################### NBINCCEL Celerra Netbackup "Includes" Script #######################################
+#                                                                                                                          #
+#           Name:  nbinccel_r004.txt     {Modified: 10/09/06, Created: 09/14/06, Author = Bill Nunn}                       #
+#                                                                                                                          #
+#       Overview:  NBINCCEL (NetBackup INCludes for CELerra) is a script run on the Celerra Control station used to        #
+#                  generate an "includes" list of Celerra Data Mover exports to be backed up by Netbackup using NDMP.      #
+#                  Nbinccel is designed to be run under the Celerra "nasadmin" or "root" user id and was created to        #
+#                  support the Symantec Netbackup master server "NB_filer_includes_build" script.                          #
+#                                                                                                                          #
+#     Repository: https://github.com/bluenunn/Toolchest/                                                                   #
+#                                                                                                                          #
+#         Syntax:  sudo ssh <nasadmin|root>@<celerra_control_station> /<path_tools>/nbinccel data_mover=<ndmpDNSname>      #
+#                                                                                                                          #
+#          Setup:  create /$path_tools/nbinccel             {pre-stage "nbinccel" on Celerra Control Station}              #
+#                  chmod +x /$path_tools/nbinccel           {grant execution permissions}                                  #
+#                                                                                                                          #
+#           Dirs:  path_base=/home/nasadmin/netbackup/nbinccel                        {Base directory}                     #
+#                  path_excl=/home/nasadmin/netbackup/nbinccel/excludes               {Excludes input directory}           #
+#                  path_incl=/home/nasadmin/netbackup/nbinccel/includes               {Includes output directory}          #
+#                  path_arch=/home/nasadmin/netbackup/nbinccel/includes/archive       {Includes archive directory}         #
+#                  path_logs=/home/nasadmin/netbackup/nbinccel/logs                   {Logs output directory}              #
+#                  path_parms=/home/nasadmin/netbackup/nbinccel/parms                 {Parms input directory}              #
+#                  path_tmp=/home/nasadmin/netbackup/nbinccel/tmp                     {Temporary work space}               #
+#                  path_tools=/home/nasadmin/netbackup/nbinccel/tools                 {"nbinccel" script home}             #
+#                                                                                                                          #
+#          Parms:  Parameter specification hierarchy:  "command line" => "$path_parms/$parms" file => "script default".    #
+#                                                                                                                          #
+#                       data_mover=<DNSname>     {required, Celerra Data Mover NDMP DNS name, command line or parms file}  #
+#                       excludes=<file_excl>     {optional file with entries to exclude from backups, default: ""}         #
+#                                                {"Excludes" file must reside in "$path_excl" directory}                   #
+#                                                {one entry/line, wildcards ok, checkpoints are excluded automatically}    #
+#                       incl_kept=<###>          {number of "archived include files/active data mover", default: "50"}     #
+#                       logs_kept=<###>          {number of "archived log files/active data mover" default: "50"}          #
+#                       limit_gb=<###>           {maximum GBs per backup stream (NEW_STREAM), default: "200"}              #
+#                       parms=<file_parms>       {optional parameters file, must reside in "$path_parms" directory}        #
+#                                                                                                                          #
+#                  Example of setting "data_mover", "excludes", and "limit_gb" parameters in command line (id: nasadmin):  #
+#                                                                                                                          #
+#                       .../nbinccel data_mover=sjc12-nsx6656-dm03 excludes=server_3 limit_gb=300                          #
+#                                                                                                                          #
+#                  Example of setting "data_mover", "excludes", and "limit_gb" parameters in "$path_parms/$parms" file:    #
+#                                                                                                                          #
+#                       .../nbinccel  parms=server_3                                                                       #
+#                                                                                                                          #
+#                       /home/nasadmin/netbackup/nbinccel/parms/server_3:                                                  #
+#                                                                                                                          #
+#                            data_mover=sjc12-nsx6656-dm03     # DNS NDMP entry for "server_3" Data Mover on Celerra       #
+#                            excludes=server_3                 # "exclude" keyword search arguments to limit NDMP backups  #
+#                            limit_gb=300                      # reduce maximum per Netbackup NDMP stream to <= 300 GB     #
+#                                                                                                                          #
+#       Includes:  Netbackup "Includes" (_incl) list contains Celerra Data Mover exports to be backed using NDMP.          #
+#                  1st line shows Celerra Data Mover NDMP DNS entry.  NEW_STREAM limits backup stream ("<= $limit_gb").    #
+#                                                                                                                          #
+#                  Sample "$path_incl/${data_mover}_incl.txt" output:                                                      #
+#                                                                                                                          #
+#                       DATA_MOVER=sjc12-nsx-dm03                                                                          #
+#                       /apps_appfluent                                                                                    #
+#                       /apps_informatica                                                                                  #
+#                       /apps_informatica_admin_ENG                                                                        #
+#                       NEW_STREAM                                                                                         #
+#                       /apps_informatica_admin_FIN                                                                        #
+#                       /apps_informatica_admin_HR                                                                         #
+#                       /users_info_prod                                                                                   #
+#                       ...                                                                                                #
+#                                                                                                                          #
+#        Archive:  Historical Netbackup "Includes" data.  Contains export size (MBs) and full export NDMP backup path.     #
+#                  Maximum number of "_arch_mbin" entries retained in $path_arch equals "$incl_kept x $srvrs_act".         #
+#                  "$srvrs_act" represents the number of active Data Movers on the Celerra.                                #
+#                                                                                                                          #
+#                  Sample "$path_arch/${data_mover}_arch_mbin_${timestamp}.txt" output:                                    #
+#                                                                                                                          #
+#                           0   sjc12-nsx6656-dm03:/apps_appfluent                                                         #
+#                       81920   sjc12-nsx6656-dm03:/apps_informatica                                                       #
+#                       63488   sjc12-nsx6656-dm03:/apps_informatica_admin_ENG                                             #
+#                       71680   sjc12-nsx6656-dm03:/apps_informatica_admin_FIN                                             #
+#                        7007   sjc12-nsx6656-dm03:/apps_informatica_admin_HR                                              #
+#                        5639   sjc12-nsx6656-dm03:/users_info_prod                                                        #
+#                         ...                                                                                              #
+#                                                                                                                          #
+#           Logs:  "$path_logs/${data_mover}_log_${timestamp}.txt" shows environmental and PARM data and STDERR output.    #
+#                  Number of "_log" files retained equals "$logs_kept x $srvrs_act".                                       #
+#                                                                                                                          #
+############################################################################################################################
+
+# Record command line parameters and timestamp
+
+cmd_parms=$*
+
+timestamp=$(date '+%Y-%m-%d_%H:%M:%S')
+
+export NAS_DB=/nas                              # {export NAS_DB ENV variable, allows nbinccel to run under root}
+export PATH=$PATH:/nas/bin                      # {add Celerra command directory to $PATH, needed if running under root}
+
+#Set nbinccel path variables & create directories if they don't already exist
+
+path_base=/home/nasadmin/netbackup/nbinccel
+path_excl=/home/nasadmin/netbackup/nbinccel/excludes
+path_incl=/home/nasadmin/netbackup/nbinccel/includes
+path_arch=/home/nasadmin/netbackup/nbinccel/includes/archive
+path_logs=/home/nasadmin/netbackup/nbinccel/logs
+path_parms=/home/nasadmin/netbackup/nbinccel/parms
+path_tmp=/home/nasadmin/netbackup/nbinccel/tmp
+path_tools=/home/nasadmin/netbackup/nbinccel/tools
+
+rm -rf $path_tmp                                             # {remove nbinccel "tmp" directory from previous runs}
+
+if [[ ! -d $path_base ]];  then mkdir -p $path_base;  fi
+if [[ ! -d $path_excl ]];  then mkdir -p $path_excl;  fi
+if [[ ! -d $path_incl ]];  then mkdir -p $path_incl;  fi
+if [[ ! -d $path_arch ]];  then mkdir -p $path_arch;  fi
+if [[ ! -d $path_logs ]];  then mkdir -p $path_logs;  fi
+if [[ ! -d $path_parms ]]; then mkdir -p $path_parms; fi
+if [[ ! -d $path_tmp ]];   then mkdir -p $path_tmp;   fi
+if [[ ! -d $path_tools ]]; then mkdir -p $path_tools; fi
+
+# Set variables specified in command line.
+
+if echo $cmd_parms | egrep "data_mover=|excludes=|incl_kept=|logs_kept=|limit_gb=|parms=" > /dev/null;then
+     for parm in $(echo $cmd_parms);do
+          echo $parm | egrep "data_mover=|excludes=|incl_kept=|logs_kept=|limit_gb=|parms="
+     done > $path_tmp/cmd_parms
+fi
+
+if [[ -s $path_tmp/cmd_parms ]];then
+   if egrep "data_mover=" $path_tmp/cmd_parms > /dev/null;then
+      data_mover=$(awk '/data_mover=/{print substr($1,index($1,"data_mover=")+11)}' $path_tmp/cmd_parms)
+   fi
+   if egrep "excludes=" $path_tmp/cmd_parms > /dev/null;then
+      excludes=$(awk '/excludes=/{print substr($1,index($1,"excludes=")+9)}' $path_tmp/cmd_parms)
+   fi
+   if egrep "incl_kept=" $path_tmp/cmd_parms > /dev/null;then
+      incl_kept=$(awk '/incl_kept=/{print substr($1,index($1,"incl_kept=")+10)}' $path_tmp/cmd_parms)
+   fi
+   if egrep "logs_kept=" $path_tmp/cmd_parms > /dev/null;then
+      logs_kept=$(awk '/logs_kept=/{print substr($1,index($1,"logs_kept=")+10)}' $path_tmp/cmd_parms)
+   fi
+   if egrep "limit_gb=" $path_tmp/cmd_parms > /dev/null;then
+      limit_gb=$(awk '/limit_gb=/{print substr($1,index($1,"limit_gb=")+9)}' $path_tmp/cmd_parms)
+   fi
+   if egrep "parms=" $path_tmp/cmd_parms > /dev/null;then
+      parms=$(awk '/parms=/{print substr($1,index($1,"parms=")+6)}' $path_tmp/cmd_parms)
+   fi
+fi
+
+# Set variables in parameters file if not already defined.  "^[ 	]*" = "^[<space><tab>]*"
+
+if [[ -n $parms && -s $path_parms/$parms ]];then
+   if [[ -z $data_mover ]];then
+      if egrep "^[ 	]*data_mover=" $path_parms/$parms > /dev/null;then
+         data_mover=$(egrep "^[ 	]*data_mover=" $path_parms/$parms|tail -1|awk '{print substr($1,index($1,"data_mover=")+11)}')
+      fi
+   fi
+   if [[ -z $excludes ]];then
+      if egrep "^[ 	]*excludes=" $path_parms/$parms > /dev/null;then
+         excludes=$(egrep "^[ 	]*excludes=" $path_parms/$parms|tail -1|awk '{print substr($1,index($1,"excludes=")+9)}')
+      fi
+   fi
+   if [[ -z $incl_kept ]];then
+      if egrep "^[ 	]*incl_kept=" $path_parms/$parms > /dev/null;then
+         incl_kept=$(egrep "^[ 	]*incl_kept=" $path_parms/$parms|tail -1|awk '{print substr($1,index($1,"incl_kept=")+10)}')
+      fi
+   fi
+   if [[ -z $logs_kept ]];then
+      if egrep "^[ 	]*logs_kept=" $path_parms/$parms > /dev/null;then
+         logs_kept=$(egrep "^[ 	]*logs_kept=" $path_parms/$parms|tail -1|awk '{print substr($1,index($1,"logs_kept=")+10)}')
+      fi
+   fi
+   if [[ -z $limit_gb ]];then
+      if egrep "^[ 	]*limit_gb=" $path_parms/$parms > /dev/null;then
+         limit_gb=$(egrep "^[ 	]*limit_gb=" $path_parms/$parms|tail -1|awk '{print substr($1,index($1,"limit_gb=")+9)}')
+      fi
+   fi
+fi
+
+# Set variables not specified in command line or parameters file for $incl_kept, $logs_kept, $limit_gb.
+
+if [[ -z $incl_kept ]];then incl_kept=50;fi
+if [[ -z $logs_kept ]];then logs_kept=50;fi
+if [[ -z $limit_gb ]]; then  limit_gb=200;fi
+
+((limit_mb=1024*$limit_gb))
+
+# Verify command syntax and test for existence of Data Mover on Celerra
+
+if [[ -z $data_mover ]];then
+     print "Netbackup Celerra Data Mover NDMP DNS variable \$data_mover not set." >> $path_logs/${data_mover}_stderr_${timestamp}.txt
+     exit 1
+fi
+
+host $data_mover > ${path_tmp}/data_mover_ip                # {Celerra IP address lookup command, similar to nslookup}
+
+if egrep "not found" ${path_tmp}/data_mover_ip > /dev/null;then
+     print "IP address not found for Celerra Data Mover \"$data_mover\"." >> $path_logs/${data_mover}_stderr_${timestamp}.txt
+     exit 1
+else
+     data_mover_ip=$(cat ${path_tmp}/data_mover_ip|tail -1|awk '{print $NF}')
+fi
+
+nas_server -list 2>>$path_logs/${data_mover}_stderr_${timestamp}.txt | awk '$2==1{print $NF}' > ${path_tmp}/servers
+
+srvrs_act=$(cat ${path_tmp}/servers | wc -l)                # {number of active Data Movers on Celerra}
+
+for srvr in $(cat ${path_tmp}/servers);do
+     if server_ifconfig $srvr -a 2>>$path_logs/${data_mover}_stderr_${timestamp}.txt | egrep $data_mover_ip > /dev/null;then
+          server=$srvr
+     fi
+done
+
+if [[ -z $server ]];then
+     print "Variable \"\$data_mover = $data_mover\" not found on Celerra $(hostname)." >> $path_logs/${data_mover}_stderr_${timestamp}.txt
+     exit 1
+fi
+
+# Capture and build "$path_incl/${data_mover}.txt" and "$path_arch_${data_mover}_arch_mbin_${timestamp}.txt"
+
+server_mount $server | egrep " on " | egrep -v "^root_fs_| ckpt," | awk '{print $3,$1}' > $path_tmp/mount_fs_all
+
+awk '{print $1}' $path_tmp/mount_fs_all | sort > $path_tmp/mount_all
+
+if [[ -n $excludes && -s $path_excl/$excludes ]];then
+     egrep -v "$(paste -d\| -s $path_excl/$excludes)" $path_tmp/mount_all
+else
+     cat $path_tmp/mount_all
+fi                                                    > $path_tmp/mount_srch
+
+for mount_srch in $(cat $path_tmp/mount_srch);do
+     egrep "^${mount_srch} " $path_tmp/mount_fs_all
+done                                                  > $path_tmp/mount_fs
+
+awk '{print $1}' $path_tmp/mount_fs > $path_tmp/mounts
+awk '{print $2}' $path_tmp/mount_fs > $path_tmp/fs
+
+for fs in $(cat $path_tmp/fs);do
+     nas_fs -size $fs 2>>$path_logs/${data_mover}_stderr_${timestamp}.txt | egrep "used = " | awk '{print $9}'
+done > $path_tmp/mb
+
+paste $path_tmp/mb $path_tmp/mounts > $path_tmp/mb_mounts
+
+awk   'BEGIN {size_mb=0}
+     NR == 1 {print "DATA_MOVER="data_mover}
+     NR  > 1 {size_mb=size_mb+$1; if ( size_mb>=limit_mb ) print "NEW_STREAM"}
+             {print $2}
+' data_mover=$data_mover limit_mb=$limit_mb $path_tmp/mb_mounts > $path_incl/${data_mover}_incl.txt
+
+awk '{printf("%10d   %s:%s\n", $1,data_mover,$2)}
+' data_mover=$data_mover $path_tmp/mb_mounts > $path_arch/${data_mover}_arch_mbin_${timestamp}.txt
+
+# Add parameters and variables to Log file:
+
+printf   "\n                      NBINCCEL Log File\n\n"                     > $path_logs/${data_mover}_log_${timestamp}.txt
+
+print    "              Timestamp:  $timestamp"                             >> $path_logs/${data_mover}_log_${timestamp}.txt
+print    "             Data Mover:  $data_mover"                            >> $path_logs/${data_mover}_log_${timestamp}.txt
+print    "     Command line parms:  $cmd_parms"                             >> $path_logs/${data_mover}_log_${timestamp}.txt
+printf   "   Number of active DMs:  %-d\n"   $srvrs_act                     >> $path_logs/${data_mover}_log_${timestamp}.txt
+printf   "       Includes kept/DM:  %-d\n"   $incl_kept                     >> $path_logs/${data_mover}_log_${timestamp}.txt
+printf   "           Logs kept/DM:  %-d\n"   $logs_kept                     >> $path_logs/${data_mover}_log_${timestamp}.txt
+printf   " GB limit/backup stream:  %-d\n\n" $limit_gb                      >> $path_logs/${data_mover}_log_${timestamp}.txt
+
+# Add Parms file to Log file:
+
+if [[ -z $parms ]];then
+   print "Parms file:  not specified"                                       >> $path_logs/${data_mover}_log_${timestamp}.txt
+else
+   if [[ -s $path_parms/$parms ]];then
+      printf "Parms file \"$path_parms/$parms\" definitions:\n\n"           >> $path_logs/${data_mover}_log_${timestamp}.txt
+      awk '{print "     "$0}' $path_parms/$parms                            >> $path_logs/${data_mover}_log_${timestamp}.txt
+   elif [[ ! -a $path_parms/$parms ]];then
+      print "Parms file:  \"$path_parms/$parms\" doesn't exist"             >> $path_logs/${data_mover}_log_${timestamp}.txt
+   else 
+      print "Parms file:  \"$path_parms/$parms\" is empty"                  >> $path_logs/${data_mover}_log_${timestamp}.txt
+   fi
+fi
+
+# Add Excludes file to Log file:
+
+if [[ -z $excludes ]];then
+   printf "\nExcludes file:  not specified\n"                               >> $path_logs/${data_mover}_log_${timestamp}.txt
+else
+   if [[ -s $path_excl/$excludes ]];then
+      printf "\nExcludes file \"$path_excl/$excludes\" keywords:\n\n"       >> $path_logs/${data_mover}_log_${timestamp}.txt
+      awk '{print "     "$0}' $path_excl/$excludes                          >> $path_logs/${data_mover}_log_${timestamp}.txt
+   elif [[ ! -a $path_excl/$excludes ]];then
+      printf "\nExcludes file:  \"$path_excl/$excludes\" doesn't exist\n"   >> $path_logs/${data_mover}_log_${timestamp}.txt
+   else
+      printf "\nExcludes file:  \"$path_excl/$excludes\" empty\n"           >> $path_logs/${data_mover}_log_${timestamp}.txt
+   fi
+fi
+
+# Add Standard Error output to Log file:
+
+if [[ -s $path_logs/${data_mover}_stderr_${timestamp}.txt ]];then
+   printf "\nStandard Error Output:\n\n"
+   awk '{print "     "$0}' $path_logs/${data_mover}_stderr_${timestamp}.txt >> $path_logs/${data_mover}_log_${timestamp}.txt
+   print "" >> $path_logs/${data_mover}_log_${timestamp}.txt
+else
+     printf "\nStandard Error:  none\n\n"                                   >> $path_logs/${data_mover}_log_${timestamp}.txt
+fi
+
+rm -rf $path_logs/${data_mover}_stderr_${timestamp}.txt
+
+# "Verify/Reduce" old "$path_arch/<archived_include_files>" and "$path_logs/<log_files>"
+
+incl_num=$(ls -l $path_arch | egrep "\.txt$" | wc -l)
+
+if [[ $incl_num -gt $((incl_kept*srvrs_act)) ]]; then
+       for incl_old in $(ls -lt $path_arch | awk '/\.txt$/{print $NF}' | tail -$(($incl_num-$incl_kept*srvrs_act)));do
+            rm -rf $incl_old
+       done
+fi
+
+logs_num=$(ls -l $path_logs | egrep "\.txt$" | wc -l)
+
+if [[ $logs_num -gt $((logs_kept*srvrs_act)) ]]; then
+       for log_old in $(ls -lt $path_logs | awk '/\.txt$/{print $NF}' | tail -$(($logs_num-$logs_kept*srvrs_act)));do
+            rm -rf $log_old
+       done
+fi
