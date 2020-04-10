@@ -25,6 +25,8 @@ netlist_r004.txt - Netapp NAS storage oversubscription audit utility (supports u
 
 rdflist_r004.txt - EMC SRDF remote replication audit utility (supports configurable sliding scale "YYYY_MM" usage reporting).
 
+srm_mon_r003.txt - SRM (Site Recovery Manager) SRDF monitor within a metro area (supports user defined threshold alerts).
+
 vdblist_utility_&_templates_r005.zip - VDBench Storage Perf Benchmark utility & templates (supports "side_by_side" graphs).
 
 vmax_audit_r006.txt - Audits EMC [PV]MAX (single line "Config, Pool, Efficiency, Provision & Subscription" data per array). 
