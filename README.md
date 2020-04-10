@@ -20,10 +20,10 @@ metlist_r006.txt - EMC SRDF Metro migration "audit/config" utility (tracks migra
 
 nbinccel_r004.txt - utility audits Netbackup Includes for NDMP backups performed on EMC Celerra NAS storage.
 
-netlist_r004.txt - Netapp NAS storage oversubscription audit utilitys (supports user defined threshhold alerting).
+netlist_r004.txt - Netapp NAS storage oversubscription audit utility (supports user defined threshhold alerting).
 
 rdflist_r004.txt - EMC SRDF remote replication audit utility (supports configurable sliding scale "YYYY_MM" usage reporting).
 
 vdblist_utility_&_templates_r005.zip - VDBench Storage Perf Benchmark utility & templates (supports "side_by_side" graphs).
 
-vmax_audit_r006.txt - Audits EMC [PV]MAX (single line "Config, Pool, Efficiency, Provision & Subscription data per array). 
+vmax_audit_r006.txt - Audits EMC [PV]MAX (single line "Config, Pool, Efficiency, Provision & Subscription" data per array). 
