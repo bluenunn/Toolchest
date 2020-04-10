@@ -4,7 +4,7 @@ Platforms: EMC (VMAX & Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array),
 
 *Note: Each of the procedures, templates & utilities inside this repository are internally documented.
 
-Repository summary:
+GitHub Repository:  https://github.com/bluenunn/Toolchest/
 
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
