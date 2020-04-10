@@ -16,7 +16,7 @@ mds_port_channel_audit_proc_r007.txt - Creates Cisco MDS Port Channel Summary Ta
 
 mds_zone_extract_proc_r002.txt - Returns zone definitions for set of user defined search strings (includes Regex support).
 
-metlist_r006.txt - EMC SRDF Metro migration "audit/config" utility (tracks migration progress & creates host cleanup syntax).
+metlist_r006.txt - EMC SRDF Metro migration "audit/config" utility (tracks migrations & creates host cleanup syntax).
 
 nbinccel_r004.txt - utility audits Netbackup Includes for NDMP backups performed on EMC Celerra NAS storage.
 
