@@ -22,7 +22,7 @@ mds_zone_extract_proc_r002.txt - Returns zone definitions for set of user define
 
 metlist_r006.txt - EMC SRDF Metro migration "audit/config" utility (tracks migrations & creates host cleanup syntax).
 
-nbinccel_r004.txt - utility audits Netbackup Includes for NDMP backups performed on EMC Celerra NAS storage.
+nbinccel_r004.txt - Utility audits Netbackup Includes for NDMP backups performed on EMC Celerra NAS storage.
 
 netlist_r004.txt - Netapp NAS storage oversubscription audit utility (supports user defined threshhold alerting).
 
