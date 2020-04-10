@@ -2,7 +2,7 @@
 
 Platforms: EMC (VMAX & Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array), Cisco (MDS & UCS), Oracle and VDBench.
 
-Each of the procedures, templates & utilities inside this repository are internally documented.
+*Note: Each of the procedures, templates & utilities inside this repository are internally documented.
 
 Repository summary:
 
