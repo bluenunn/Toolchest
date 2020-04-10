@@ -1,0 +1,553 @@
+#!/bin/ksh
+
+############################################################################# SRM_MON Symmetrix SRA Storage Monitor ###############################################################################
+#                                                                                                                                                                                                 #
+#           Name:  srm_mon                   {Release = 003, Modified: 07/13/11, Created: 03/08/11, Author = Bill Nunn}                                                                           #
+#                                                                                                                                                                                                 #
+#         Syntax:  ./srm_mon [-rst] [info="<msg>"] [c=###] [i=<seconds>] [excl="<dg1,dg2,.>"] [a_id=<al1,al2,...>] [n_id=<nt1,nt2,...>] [r_id=<rp1,rp2,...>] [e_id=<er1,er2,...>]                 #
+#                              :::                                                                                                                                                                #
+#        Options:              :::-("t": "timestamp" - "$ts" added to output file name.)                                                                                                          #
+#                              ::--("s": "scratch"   - "/tmp/srmtmp*" temporary work files are not removed at the end of execution.)                                                              #
+#                              :---("r": "remove"    - remove all old output files.  If "-r" is not specified, old output files with embedded timestamps ($ts) are not removed.)                  #
+#                                                                                                                                                                                                 #
+#          Parms: [info="<msg>"]         - Specify in double quotes.  Optional informational message sent to $a_id, $n_id & $e_id group email lists.                                              #
+#                 [c=###]                - "$c" (default: 10) equals the count (max number of times each R1/R2 pair in each SRM SRDF DG is tested to see if it is in a "sycnchronized" state).    #
+#                 [i=<seconds>]          - "$i" (default: 60) equals the number seconds between each test to determine if R1/R2 pairs in SRM DGs are in a "synchronized" state.                   #
+#                 [excl="<dg1,dg2,...>"] - Specify in double quotes.  SRM SRDF DG exclude list ("<full_name>" or "<partial_name>*").  (ex: excl="DG_100802082148,DG_1011*,...").              * 1 #
+#                 [a_id=<al1,al2,...>]   - Alert  group list (default: storage-admin@epage.cisco.com,virtual-duty@epage.cisco.com).                                                           * 2 #
+#                 [n_id=<nt1,nt2,...>]   - Notify group list (default: storage-admin@cisco.com,virtual-duty@cisco.com)                                                                        * 2 #
+#                 [r_id=<rp1,rp2,...>]   - Report group list (default: "" (null)).  If non-null, srm_mon always sends results to $r_id IDs regardless of the state of SRM "DGs/SRDF pairs".   * 2 #
+#                 [e_id=<er1,er2,...>]   - Error  group list (default: storage-admin@cisco.com,virtual-duty@cisco.com).  Send message if srm_mon returns non-zero return code.                * 2 #
+#                                                                                                                                                                                                 #
+#              *Note 1:  Alerts will not be reported for SRM SRDF DGs in the exclude list ($excl).  Wildcard (*) may be used with partial SRM SRDF DG name(s) (ex: DG__1004*,DG_1005*,...).       #
+#              *Note 2:  If a group email/epage list ($a_id, $n_id, $e_id, $r_id) is set to null (ex: n_id=""), no alerts or messages are sent to that group.  $e_id should not be set to null.   #
+#                                                                                                                                                                                                 #
+#     Repository:  Repository: https://github.com/bluenunn/Toolchest/                                                                                                                             #
+#                                                                                                                                                                                                 #
+#       Overview:  SRM_MON audits SRM (Site Recovery Manager) synchronous SRDF replication for R1/R2 pairs located between source and target datacenters within a metro area.                     #
+#                  The tool may be run on any host managing SRM SRDF DGs (Device Groups) of the format "DG_[0-9] ..." that is running Solutions Enabler (>= V7.1x).  Example:                     #
+#                                                                                                                                                                                                 #
+#                       oz101-san-mgr1: $ sudo symcli                                                                                                                                             #
+#                                                                                                                                                                                                 #
+#                       Symmetrix Command Line Interface (SYMCLI) Version V7.1.2.0 (Edit Level: 1059)                                                                                             #
+#                       built with SYMAPI Version V7.1.2.0 (Edit Level: 1059)                                                                                                                     #
+#                                                                                                                                                                                                 #
+#                       oz101-san-mgr1: $ sudo symdg list                                                                                                                                         #
+#                                                                                                                                                                                                 #
+#                                                   D E V I C E      G R O U P S                                                                                                                  #
+#                                                                                     Number of                                                                                                   #
+#                       Name               Type     Valid  Symmetrix ID  Devs   GKs  BCVs  VDEVs  TGTs                                                                                            #
+#                       DG_100427094312    RDF2     Yes    000190104370     1     0     0      0     0      <= sample SRM (DG_[0-9]...) "RDF2" Symmetrix Device Group                             #
+#                       ...                                                                                                                                                                       #
+#                       DG_101120110359    RDF1     Yes    000192602445     1     0     0      0     0      <= sample SRM (DG_[0-9]...) "RDF1" Symmetrix Device Group                             #
+#                                                                                                                                                                                                 #
+#                       oz101-san-mgr1:/users/bnunn $ sudo symrdf -g DG_101120110359 query                                                                                                        #
+#                                                                                                                                                                                                 #
+#                              Source (R1) View                 Target (R2) View     MODES                                                                                                        #
+#                       --------------------------------    ------------------------ ----- ------------                                                                                           #
+#                                    ST                  LI      ST                                                                                                                               #
+#                       Standard      A                   N       A                                                                                                                               #
+#                       Logical       T  R1 Inv   R2 Inv  K       T  R1 Inv   R2 Inv       RDF Pair                                                                                               #
+#                       Device  Dev   E  Tracks   Tracks  S Dev   E  Tracks   Tracks MDAE  STATE                                                                                                  #
+#                       -------------------------------- -- ------------------------ ----- ------------                                                                                           #
+#                       DEV001  30CD RW       0        0 RW 0332 WD       0        0 S...  Synchronized     <= sample SRM SRDF R1/R2 pair in a "Synchronized" state                               #
+#                                                                                                                                                                                                 #
+#                  Sample related "srm_mon" syntax using "defaults" and "overrides":                                                                                                              #
+#                                                                                                                                                                                                 #
+#                        Defaults:  oz101-san-mgr1: $ ./srm_mon                                                              # {run using defaults documented above}                              #
+#                                                                                                                                                                                                 #
+#                       Overrides:  oz101-san-mgr1: $ ./srm_mon -t c=10 i=90 n_id=virtual-duty@cisco.com,bnunn@cisco.com     # {add timestamp, count=10, interval=90, alter $n_id notify list}    #
+#                                                                                                                                                                                                 #
+#        Outputs:  /tmp/srm_mon_output[${ts}].txt     # Provide overview of complete SRM SRDF environment on host and alerts (if any).  Always sent to "$r_id" email ids if non-null.             #
+#                  /tmp/srm_mon_stderr                # Capture commands and related errors (if any) generated by srm_mon.                                                                        #
+#                                                                                                                                                                                                 #
+###################################################################################################################################################################################################
+
+script=$0                                                                                          # capture script name
+
+fields=$*                                                                                          # capture script parameters
+
+cmd_line="$0 $@"                                                                                   # capture command line
+
+if [[ $(uname) = SunOS ]];then awk=nawk;else awk=awk;fi                                            # set "awk" versus "nawk"
+
+id=$(id|$awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')                   # determine user id
+
+if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                              # determine if "sudo" is needed
+
+host=$(uname -n | $awk '{gsub(/.cisco.com/,"",$1);print $1}')                                      # capture hostname
+
+if nslookup $host 2>&1 | egrep "Non-existent host" > /dev/null;then
+     ip="ip_unknown"                                                                               # host IP address not found
+else
+     ip=$(nslookup $host | $awk '/Address/{print $NF}' | tail -1)                                  # determine host IP address
+fi
+
+os_type=$(uname)                                                                                   # set host OS type
+
+# Determine specific OS (e.g. os_type "Linux" = "CEL4|CEL5|ESX3|ESX4...")
+
+if [[ $os_type = "Linux" ]];then
+     os=$($awk '/^version:/{ver=substr($2,1,index($2,".")-1)
+                  if ($2~/esx/) {gsub(/esx-/,"",ver);print "ESX"ver}
+                  else {print "CEL"ver}}'                      /etc/system-profile)
+     os_ver=$($awk '/^version/{gsub(/esx-/,"",$NF);print $NF}' /etc/system-profile)
+else
+     os=$os_type
+     os_ver=$(uname -a | $awk '{print $3}')
+fi
+
+date=$(date '+%m/%d/%y')                                                                           # set date
+
+time=$(date '+%H:%M:%S')                                                                           # set time
+
+seed=$(echo $time | $awk '{print substr($1,length($1),1)}')                                        # set seed (0-9)
+
+# Define STDERR & temporary (scratch "-s") work files
+
+stderr=/tmp/srm_mon_stderr                                                                         # set STDERR file
+
+tmp="/tmp/srmtmp"                                                                                  # set temporary file prefix
+
+# Initialize STDERR & temporary (scratch "-s") work files
+
+$sudo rm -rf $stderr                                                                               # remove previous STDERR file
+
+$sudo rm -rf ${tmp}_*                                                                              # remove previous temporary files
+
+touch $stderr                           2>/dev/null
+
+touch ${tmp}_fields                     2>/dev/null
+touch ${tmp}_options                    2>/dev/null
+touch ${tmp}_parms                      2>/dev/null
+touch ${tmp}_parms_fmt                  2>/dev/null
+touch ${tmp}_header                     2>/dev/null
+touch ${tmp}_excludes                   2>/dev/null
+touch ${tmp}_err_id                     2>/dev/null
+touch ${tmp}_mailer                     2>/dev/null
+
+# Capture command line fields & options:
+
+for field in $(echo $fields); do echo $field; done                                                                                                              >> ${tmp}_fields
+
+egrep "^-" ${tmp}_fields                                                                                                                                        >> ${tmp}_options
+
+egrep -v "^-" ${tmp}_fields                                                                                                                                     >> ${tmp}_parms
+
+if [[ -s ${tmp}_parms ]];then
+     $awk 'BEGIN {ct_eq=0}
+           $1~/=/{++ct_eq;if (ct_eq == 1) {printf("%s",$1)} else {printf("\n%s",$1)}}
+          $1!~/=/{printf(" %s",$1)}
+             END {print ""}' ${tmp}_parms                                                                                                                       >> ${tmp}_parms_fmt
+fi
+
+# Set options (0: option not set, 1: option set):
+
+option_r=0
+option_s=0
+option_t=0
+
+if egrep "r" ${tmp}_options > /dev/null;then option_r=1;fi
+if egrep "s" ${tmp}_options > /dev/null;then option_s=1;fi
+if egrep "t" ${tmp}_options > /dev/null;then option_t=1;fi
+
+# Verify if old output files with embedded timestamps ($ts) are to be removed ($option_r 0: save, 1: remove)
+
+if [[ $option_r -eq 1 ]];then $sudo rm -rf /tmp/srm_mon_*.txt;fi
+
+# Set timestamp ($option_t = 0: null, 1: _yyyy-mm-dd_hh:mm:ss):
+
+if [[ $option_t -eq 1 ]];then ts="_$(date '+%Y-%m-%d_%H:%M:%S')";else ts="";fi
+
+# Set optional parm default values:
+
+# Syntax:  ./srm_mon [-rst] [info="<msg>"] [c=###] [i=<seconds>] [excl="<dg1,dg2,.>"] [a_id=<al1,al2,...>] [n_id=<nt1,nt2,...>] [r_id=<rp1,rp2,...>] [e_id=<er1,er2,...>]
+
+info=""
+c=10
+i=60
+excl=""
+a_id="storage-admin@epage.cisco.com,virtual-duty@epage.cisco.com"
+n_id="storage-admin@cisco.com,virtual-duty@cisco.com"
+e_id="storage-admin@cisco.com,virtual-duty@cisco.com"
+r_id=""
+
+# Check/set optional parm override values:
+
+if egrep "^info=" ${tmp}_parms_fmt > /dev/null;then info=$($awk '/^info=/{print substr($0,index($0,"info=")+5)}' ${tmp}_parms_fmt);fi
+if egrep "^c="    ${tmp}_parms_fmt > /dev/null;then    c=$($awk '/^c=/{print substr($0,index($0,"c=")+2)}'       ${tmp}_parms_fmt);fi
+if egrep "^i="    ${tmp}_parms_fmt > /dev/null;then    i=$($awk '/^i=/{print substr($0,index($0,"i=")+2)}'       ${tmp}_parms_fmt);fi
+if egrep "^excl=" ${tmp}_parms_fmt > /dev/null;then excl=$($awk '/^excl=/{print substr($0,index($0,"excl=")+5)}' ${tmp}_parms_fmt);fi
+if egrep "^a_id=" ${tmp}_parms_fmt > /dev/null;then a_id=$($awk '/^a_id=/{print substr($0,index($0,"a_id=")+5)}' ${tmp}_parms_fmt);fi
+if egrep "^n_id=" ${tmp}_parms_fmt > /dev/null;then n_id=$($awk '/^n_id=/{print substr($0,index($0,"n_id=")+5)}' ${tmp}_parms_fmt);fi
+if egrep "^e_id=" ${tmp}_parms_fmt > /dev/null;then e_id=$($awk '/^e_id=/{print substr($0,index($0,"e_id=")+5)}' ${tmp}_parms_fmt);fi
+if egrep "^r_id=" ${tmp}_parms_fmt > /dev/null;then r_id=$($awk '/^r_id=/{print substr($0,index($0,"r_id=")+5)}' ${tmp}_parms_fmt);fi
+
+# Set "$err_id" (Possible error email ids: "", "$e_id" or "${e_id},${r_id}"):
+
+echo "${e_id},${r_id}" | tr '[,]' '[\n'] | egrep -v "^[,]?$" | sed -e 's/^,//g' -e 's/,$//g' | sort -u                                                          >> ${tmp}_err_id
+err_id="";if [[ -s  ${tmp}_err_id ]];then err_id=$(paste -d, -s ${tmp}_err_id);fi
+
+# Create SRM DG exclude filter file
+
+echo "$excl" | tr '[,]' '[\n'] | egrep -v "^[,]?$" | sed -e 's/^,//g' -e 's/,$//g' | sort -u                                                                    >> ${tmp}_excludes
+
+# Initialize srm_mon output files:
+
+$sudo rm -rf /tmp/srm_mon_output.txt
+
+output=/tmp/srm_mon_output${ts}.txt
+
+touch $output
+
+# Create Header:
+
+echo "                    SRM_MON (Site Recovery Manager SRDF Replication Monitor)"                | $awk '{print "\n\n"$0"\n"}'                                >> ${tmp}_header
+echo  "Hostname: $host"                                                                            | $awk '{print "\n"$0}'                                      >> ${tmp}_header
+echo  "IP Address: $ip"                                                                                                                                         >> ${tmp}_header
+echo  "OS Type: $os"                                                                                                                                            >> ${tmp}_header
+echo  "OS Version: $os_ver"                                                                                                                                     >> ${tmp}_header
+echo  "Date: $date $time"                                                                          | $awk '{print $0"\n"}'                                      >> ${tmp}_header
+echo  "Count:    $c             {max # of srm_mon test iterations, default: 10}"                                                                                >> ${tmp}_header
+echo  "Interval: $i             {sleep interval between srm_mon tests, default: 60 seconds}"       | $awk '{print $0"\n"}'                                      >> ${tmp}_header
+echo  "Syntax: $cmd_line"                                                                          | $awk '{print $0"\n"}'                                      >> ${tmp}_header
+echo  "STDERR: \"$stderr\" contains srm_mon commands run and related errors (if any)."             | $awk '{print $0"\n"}'                                      >> ${tmp}_header
+echo  "Output: \"$output\" contains SRM SRDF environment overview and SRM alerts (if any)."        | $awk '{print $0"\n"}'                                      >> ${tmp}_header
+if [[ -n $info ]];then echo  "Info: $info"                                                         | $awk '{print $0"\n"}';fi                                   >> ${tmp}_header
+
+# Verify/set existence of "mailx" command on host:
+
+which mailx > /dev/null 2>&1
+
+rc=$?
+
+if [[ $rc -ne 0 ]];then
+
+     cat ${tmp}_header                                                                                                                                          >> $stderr
+     echo "Error: \"mailx\" command (\"which mailx\") not found on host $host.  \"srm_mon\" exiting."        | $awk '{print "\n"$0}'                            >> $stderr
+     echo "Suggestion: This may offer an argument in favor of the relative merits of the pony express.  ;-)" | $awk '{print "\n"$0"\n"}'                        >> $stderr
+     cat $stderr
+     exit 1
+
+fi
+
+# Verify Solutions Enabler >= V7.1x and SRM SRDF DGs ("DG_[0-9]...") are managed on host.  Export SYMCLI path:
+
+if   [[ -d /usr/symcli/bin ]];then
+
+     cat ${tmp}_header                                                                                                                                          >> $stderr
+     export PATH=$PATH:/usr/symcli/bin
+     symcli_ver=$($sudo symcli | $awk '/SYMCLI/{print $(NF-3)}')
+     symcli_ver_01=$(echo $symcli_ver | $awk -F"." '{print substr($1,2)}')
+     symcli_ver_02=$(echo $symcli_ver | $awk -F"." '{print $2}')
+
+     if [[ $symcli_ver_01 -lt 7 ]] || [[ $symcli_ver_01 -eq 7 && $symcli_ver_02 -eq 0 ]];then
+
+          echo "Warning: Solutions Enabler version $symcli_ver is too low on $(uname -n | tr '[a-z]' '[A-Z]')"                                                  >> $stderr
+          echo "Warning: Upgrade Solutions Enabler (minimum: V7.1x) & try again.  \"srm_mon\" exiting."                     | $awk '{print "\n"$0}'             >> $stderr
+          echo "Suggest: See if you can collaborate with one of your offices mates in the CWS to resolve the issue.  ;-)"   | $awk '{print "\n"$0"\n"}'         >> $stderr
+          cat $stderr | mailx -s "${host} SRM_MON Error: SYMCLI $symcli_ver is too low (min. V7.1x).  See $stderr" $err_id
+          cat $stderr
+          exit 1
+
+     fi
+
+else
+
+     cat ${tmp}_header                                                                                                                                          >> $stderr
+     echo "Warning: Solutions Enabler (/usr/symcli/bin) is not present on host $(uname -n | tr '[a-z]' '[A-Z]')"                                                >> $stderr
+     echo "Warning: Install Solutions Enabler & try again (minimum: V7.1x).  \"srm_mon\" exiting."                          | $awk '{print "\n"$0}'             >> $stderr
+     echo "Suggest: Be adventurous, Try adding a dash of Tabasco to your next mojito.  ;-)"                                 | $awk '{print "\n"$0"\n"}'         >> $stderr
+     cat $stderr | mailx -s "${host} SRM_MON Error: Solutions Enabler (/usr/symcli/bin) not on host.  See $stderr." $err_id
+     cat $stderr
+     exit 1
+
+fi
+
+# Patience message (only issued if "/users/${id}" exists):
+
+if [[ -d /users/${id} ]];then
+
+     case $seed in
+
+          0) echo "srm_mon has stepped out to PhilZ Coffee for a cuppa Jacob's Wonderbar Brew, back in a jiffy ;-)"         | $awk '{print "\n"$0}';;
+          1) echo "srm_mon is meditating.  Feel free to join with the mantra of your choice ;-)"                            | $awk '{print "\n"$0}';;
+          2) echo "Try to keep your head off of the keyboard.  Wouldn't want to generate any spurious interrupts ;-)"       | $awk '{print "\n"$0}';;
+          3) echo "srm_mon is engaged, perhaps just enough time to blend up a frosty beverage of your choice ;-)"           | $awk '{print "\n"$0}';;
+          4) echo "srm_mon has gone off with Alice to visit with the Queen of Hearts ;-)"                                   | $awk '{print "\n"$0}';;
+          5) echo "srm_mon was last seen in Mr. McGregor's garden playing duck duck goose with Peter & Benjamin ;-)"        | $awk '{print "\n"$0}';;
+          6) echo "srm_mon has gone for a stroll in the 100 acres wood with Kanga and Roo ;-)"                              | $awk '{print "\n"$0}';;
+          7) echo "srm_mon has passed through the looking glass and is now burrowed deeply down into Rabbit's lair ;-)"     | $awk '{print "\n"$0}';;
+          8) echo "srm_mon is out helping Christopher Robin and Owl remove the honey jar stuck on Poo's nose ;-)"           | $awk '{print "\n"$0}';;
+          9) echo "srm_mon has gone to join in the game of charades going on in Copa Cabana ;-)"                            | $awk '{print "\n"$0}';;
+
+     esac
+
+fi
+
+# Capture/verify SRM SRA SRDF output, loop up to $c times if any "non-synchronized" SRM SRDF pairs are detected:
+
+iterations=0
+no_sync=0
+
+while [[ $iterations -eq 0 ]] || [[ $no_sync -gt 0 && $iterations -lt $c ]];do
+
+     $sudo rm -rf ${tmp}_dg* ${tmp}_srm*
+
+     touch ${tmp}_dg                           2>/dev/null
+     touch ${tmp}_dg-v                         2>/dev/null
+     touch ${tmp}_dg_hdr                       2>/dev/null
+     touch ${tmp}_dg_srm_grps                  2>/dev/null
+     touch ${tmp}_dg_srm_combined              2>/dev/null
+     touch ${tmp}_dg_srm_invalid               2>/dev/null
+     touch ${tmp}_dg_srm_invalid_combined      2>/dev/null
+
+     touch ${tmp}_srm_dgs                      2>/dev/null
+     touch ${tmp}_srm_dgs_query                2>/dev/null
+     touch ${tmp}_srm_dgs_query_fmt            2>/dev/null
+     touch ${tmp}_srm_dgs_query_alerts         2>/dev/null
+
+     iterations=$(($iterations+1))
+
+     echo "Iteration: $(echo $iterations | $awk '{printf("%02s\n",$1)}')"                                                                                       >> $stderr
+
+     echo "Command: $sudo symdg list" | $awk '{print "\n"$0}'                                                                                                   >> $stderr
+     $sudo symdg list 2>>$stderr                                                                                                                                >> ${tmp}_dg
+
+     rc=$?
+
+     if [[ $rc -ne 0 ]];then
+          echo "Warning: Unable to run \"symdg list\".  \"srm_mon\" exiting." | $awk '{print "\n"$0}'                                                           >> $stderr
+          echo "Suggest: Try a simpler command like \"whoami\" or \"why_am_i_on_this_earth\"  ;-)"               | $awk '{print "\n"$0"\n"}'                    >> $stderr
+          cat $stderr
+          echo "See $stderr for details."                                                                        | $awk '{print "\n"$0"\n"}'
+          cat $stderr | mailx -s "${host} SRM_MON Error: \"symdg list\" non-zero ($rc) rc.  See $stderr" $err_id
+          exit 1
+     fi
+
+     $awk 'BEGIN {name=0};name==0 {print $0};$1=="Name" {name=1}' ${tmp}_dg                                                                                     >> ${tmp}_dg_hdr
+
+     $awk 'BEGIN {name=0};$1=="Name" {name=1};name==1 {if ($0~/^[ ]+DG_[0-9]+\*?[ ]/) {print $0}}' ${tmp}_dg | egrep -vf ${tmp}_excludes                        >> ${tmp}_dg_srm_grps
+
+     cat ${tmp}_dg_hdr ${tmp}_dg_srm_grps                                                                                                                       >> ${tmp}_dg_srm_combined
+
+     $awk '$3!~/Y[A-Za-z]/ {print $0}' ${tmp}_dg_srm_grps                                                                                                       >> ${tmp}_dg_srm_invalid
+
+     #Capture SRM DG list from "symdg list" or "symdg list -v":
+
+     if egrep "^[ ]+DG_[0-9]+\*[ ]" ${tmp}_dg > /dev/null;then
+
+          echo "Command: $sudo symdg list -v" | $awk '{print "\n"$0}'                                                                                           >> $stderr
+          $sudo symdg list -v 2>>$stderr                                                                                                                        >> ${tmp}_dg-v
+
+          rc=$?
+
+          if [[ $rc -ne 0 ]];then
+               echo "Warning: Unable to collect Symmetrix DG (Device Group) data.  \"srm_mon\" exiting."                          | $awk '{print "\n"$0}'       >> $stderr
+               echo "Suggest: How about a relaxing game of backgammon to take the edge off?  ;-)"                                 | $awk '{print "\n"$0"\n"}'   >> $stderr
+               cat $stderr
+               echo "See $stderr for details."                                                                                    | $awk '{print "\n"$0"\n"}'
+               cat $stderr | mailx -s "${host} SRM_MON Error: \"symdg list -v\" non-zero ($rc) return code.  See $stderr" $err_id
+               exit 1
+          fi
+
+          $awk '/^Group Name:[ ]+DG_[0-9]+$/{print $NF}' ${tmp}_dg-v | egrep -vf ${tmp}_excludes                                                                >> ${tmp}_srm_dgs
+
+     else
+
+          $awk '/^[ ]+DG_[0-9]+\*?[ ]/{print $1}' ${tmp}_dg | egrep -vf ${tmp}_excludes                                                                         >> ${tmp}_srm_dgs
+
+     fi
+
+     if [[ -s ${tmp}_srm_dgs ]]; then
+
+          for dg in $(cat ${tmp}_srm_dgs);do
+
+               echo "Command: $sudo symrdf -g $dg query" | $awk '{print "\n"$0}'                                                                                >> $stderr
+               $sudo symrdf -g $dg query 2>>$stderr                                                                                                             >> ${tmp}_srm_dgs_query
+
+               rc=$?
+
+               if [[ $rc -ne 0 ]];then
+                    echo "Warning: Unable to collect Symmetrix $dg SRM Device Group data.  \"srm_mon\" exiting."                   | $awk '{print "\n"$0}'      >> $stderr
+                    echo "Suggest: How about a relaxing game of backgammon to take the edge off? ;-)"                              | $awk '{print "\n"$0"\n"}'  >> $stderr
+                    cat $stderr
+                    echo "See $stderr for details."                                                                                | $awk '{print "\n"$0"\n"}'
+               cat $stderr | mailx -s "${host} SRM_MON Error: \"symrdf -g $dg query\" non-zero ($rc) rc.  See $stderr" $err_id
+               exit 1
+               fi
+          done
+
+     else
+
+          echo "Warning: No SRM Symmetrix DGs (Device Groups) found on host.  \"srm_mon\" exiting."                                | $awk '{print "\n"$0}'      >> $stderr
+          echo "Suggest: Saddle up and see if you can round up those little doggies ;-)"                                           | $awk '{print "\n"$0"\n"}'  >> $stderr
+          cat $stderr
+          echo "See $stderr for details."                                                                                          | $awk '{print "\n"$0"\n"}'
+          cat $stderr | mailx -s "${host} SRM_MON Error: No SRM Symmetrix DGs (Device Groups) found on host.  See $stderr" $err_id
+          exit 1
+
+     fi
+
+# Format "symrdf query" output:
+
+#                                                                          <------- Local Array ------->   <------ Remote Array ------>
+#     Host                   IP            SRM_SRDF_DG    RDFG   DG_Type     Symmetrix    Symdev   State   State   Symdev   Symmetrix       Pair_State
+#oz101-san-mgr1         72.163.32.142    DG_100427094312   10     RDF2     000190104370    1F1F      WD     RW      1910   000190105116    Synchronized
+#----+----10---+----20---+----30---+----40---+----50---+----60---+----70---+----80---+----90---+----100--+----110--+----120--+----130--+----140--+----150
+
+query_hdr_01="                                                                          <------- Local Array ------->   <------ Remote Array ------>"
+query_hdr_02="     Host                   IP            SRM_SRDF_DG    RDFG   DG_Type     Symmetrix    Symdev   State   State   Symdev   Symmetrix       Pair_State"
+
+     if [[ -s ${tmp}_srm_dgs_query ]]; then
+
+          $awk '/^Device Group \(DG) Name             :/{dg=$NF}
+                 /^DG.s Type                          :/{dg_type=$NF}
+                 /^DG.s Symmetrix ID                  :/{lcl_sym=$5}
+                 /^Remote Symmetrix ID                :/{rmt_sym=$5}
+                /^RDF \(RA) Group Number              :/{rdfg=$6}
+                                                  /^DEV/{lcl_dev=$2;lcl_st=$3;rmt_dev=$7;rmt_st=$8;pair_st=$NF
+                                                         printf("%-23s%-17s%-18s%-7s%-9s%-16s%-10s%-7s%-8s%-7s%-16s%-s\n",
+                                                                 host,ip,dg,rdfg,dg_type,lcl_sym,lcl_dev,lcl_st,rmt_st,rmt_dev,rmt_sym,pair_st)}
+               ' host=$host ip=$ip ${tmp}_srm_dgs_query                                                                                                         >> ${tmp}_srm_dgs_query_fmt
+
+     else
+
+          echo "Warning: File \"${tmp}_srm_dgs_query\" is empty.  \"srm_mon\" exiting." | $awk '{print "\n"$0}'                                                 >> $stderr
+          echo "Suggest: It is a little like herding cats.  Probably just left the gate open and let them out.  ;-)" | $awk '{print "\n"$0"\n"}'                >> $stderr
+          cat $stderr
+          echo "See $stderr for details."                                                                            | $awk '{print "\n"$0"\n"}'
+          cat $stderr | mailx -s "${host} SRM_MON Error: No SRM Symmetrix DG query data found.  See $stderr" $err_id
+          exit 1
+
+     fi
+
+     # Capture "non-Synchronized" SRM SRDF pairs (if any) in ${tmp}_srm_dgs_query_alerts:
+
+     $awk '$NF!="Synchronized"{print $3}' ${tmp}_srm_dgs_query_fmt | sort -u                                                                                    >> ${tmp}_srm_dgs_query_alerts
+
+     # If "non-Synchronized" SRM SRDF pairs exist, then set $no_sync (# of non-sync SRM SRDF pairs) & sleep for $i seconds before repeating loop:
+
+     if [[ -s ${tmp}_srm_dgs_query_alerts ]];then
+
+          no_sync=$(wc -l ${tmp}_srm_dgs_query_alerts | $awk '{print $1}')
+          sleep $i
+
+     else
+
+          no_sync=0
+
+     fi
+
+done
+
+# Populate srm_mon $output file (/tmp/srm_mon_output${ts}.txt) with alerts (if any) and overview of SRM SRDF environment:
+
+# Add header to $output file:
+
+cat ${tmp}_header                                                                                                                                               >> $output
+
+# Add Invalid SRM DGs (if any) to $output file:
+
+invalid=$(wc -l ${tmp}_dg_srm_invalid | $awk '{printf $1}')
+
+echo "Invalid SRM DGs: $invalid" | $awk '{print $0"\n"}'                                                                                                        >> $output
+
+if [[ -s ${tmp}_dg_srm_invalid ]];then
+
+     cat ${tmp}_dg_hdr ${tmp}_dg_srm_invalid                                                                                                                    >> ${tmp}_dg_srm_invalid_combined
+
+     $awk '{print "     "$0};END {print ""}' ${tmp}_dg_srm_invalid_combined                                                                                     >> $output
+
+fi
+
+# Add Alerts \"${tmp}_srm_dgs_query_alerts\" for "non-Synchronized" SRM SRDF R1/R2 pairs (if any) to $output file:
+
+echo "SRM SRDF Alerts: $no_sync          {# of \"non-Synchronized\" SRM SRDF pairs}" | $awk '{print $0"\n"}'                                                    >> $output
+
+if [[ -s ${tmp}_srm_dgs_query_alerts ]];then
+
+     echo "     $query_hdr_01"                                                                                                                                  >> $output
+     echo "     $query_hdr_02"                                                                                                                                  >> $output
+     $awk '{print "     "$0};END {print ""}' ${tmp}_srm_dgs_query_alerts                                                                                        >> $output
+
+fi
+
+# Add SRM related "symdg list" output to $output file
+
+srm_dgs=$(wc -l ${tmp}_srm_dgs | $awk '{print $1}')
+
+echo  "Total SRM SRDF DGs: $srm_dgs"                                                                                                                            >> $output
+
+$awk '{print "     "$0};END {print ""}' ${tmp}_dg_srm_combined                                                                                                  >> $output
+
+# Add all unexcluded ($excl) SRM DG SRDF R1/R2 pairs to $output file:
+
+srm_pairs=$(wc -l ${tmp}_srm_dgs_query_fmt | $awk '{print $1}')
+
+echo  "Total SRM SRDF Pairs: $srm_pairs" | $awk '{print "\n"$0}'                                                                                                >> $output
+
+if [[ -s ${tmp}_srm_dgs_query_fmt ]];then
+
+     echo "     $query_hdr_01"                                                                                                                                  >> $output
+     echo "     $query_hdr_02"                                                                                                                                  >> $output
+     $awk '{print "     "$0}' ${tmp}_srm_dgs_query_fmt                                                                                                          >> $output
+
+fi
+
+# Generate srm_mon email list ("$a_id,$n_id,$r_id") and send out $output file:
+
+if [[ invalid -gt 0 || no_sync -gt 0 ]];then
+
+     echo "${a_id},${n_id},${r_id}" | tr '[,]' '[\n'] | egrep -v "^[,]?$" | sed -e 's/^,//g' -e 's/,$//g' | sort -u                                             >> ${tmp}_mailer
+
+else
+
+     echo "${r_id}" | tr '[,]' '[\n'] | egrep -v "^[,]?$" | sed -e 's/^,//g' -e 's/,$//g' | sort -u                                                             >> ${tmp}_mailer
+
+fi
+
+mailer_id="";if [[ -s  ${tmp}_mailer ]];then mailer_id=$(paste -d, -s ${tmp}_mailer);fi
+
+if [[ $mailer_id != "" ]];then
+
+     if [[ invalid -gt 0 || no_sync -gt 0 ]];then
+
+          cat $output | mailx -s "${host} SRM_MON Alert: Invalid SRM DGs or non-Synchronized SRDF pairs detected.  See $output" $mailer_id
+
+     else
+          cat $output | mailx -s "${host} SRM_MON Update: Requested SRM SRDF DG Environment Overview.  See $output" $mailer_id
+
+     fi
+
+fi
+
+# Display srm_mon header & summary results (only issued if "/users/${id}" exists):
+
+if [[ -d /users/${id} ]];then
+     echo "                    SRM_MON (Site Recovery Manager SRDF Replication Monitor)"                             | $awk '{print "\n\n"$0"\n"}'
+     echo  "Hostname: $host"                                                                                         | $awk '{print "\n"$0}'
+     echo  "IP Address: $ip"
+     echo  "OS Type: $os"
+     echo  "OS Version: $os_ver"
+     echo  "Date: $date $time"                                                                                       | $awk '{print $0"\n"}'
+     echo  "Count:      $c                  {max # of srm_mon test iterations, default: 10}"
+     echo  "Iterations:  $iterations                  {actual # of srm_mon test iterations}"
+     echo  "Interval:   $i                  {sleep interval between srm_mon tests, default: 60 seconds}"             | $awk '{print $0"\n"}'
+     echo  "Syntax: $cmd_line"                                                                                       | $awk '{print $0"\n"}'
+
+     echo  "  Total SRM SRDF DGs: $srm_dgs"
+     echo  "Total SRM SRDF Pairs: $srm_pairs"                                                                        | $awk '{print $0"\n"}'
+     echo "Invalid SRM DGs: $invalid"
+     echo "SRM SRDF Alerts: $no_sync              {# of \"non-Synchronized\" SRM SRDF pairs}"                        | $awk '{print $0"\n"}'
+
+     echo  "STDERR: \"$stderr\" contains srm_mon commands run and related errors (if any)."                          | $awk '{print $0"\n"}'
+     echo  "Output: \"$output\" contains SRM SRDF environment overview and SRM alerts (if any)."                     | $awk '{print $0"\n"}'
+
+fi
+
+# Verify if temporary ("-s") scratch files are to be retained before exiting
+
+if [[ $option_s -eq 0 ]];then $sudo rm -rf ${tmp}*;fi
+
+exit 0
