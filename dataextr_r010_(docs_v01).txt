@@ -1,0 +1,385 @@
+
+################################################################################ (DataExtr Utility) ###############################################################################
+#                                                                                                                                                                                 #
+#           File:  File:  dataextr_r010_(docs_v01).txt       {Modified: 04/27/20, Created: 11/22/19, Author: Bill Nunn}                                                           #
+#                                                                                                                                                                                 #
+#       Overview:                                                                                                                                                                 #
+#                                                                                                                                                                                 #
+#            DataExtr utility is used to run queries on raw character delimited data sources (ex: CSV files) based upon a user defined “scope” (ordered subset of fields          #
+#            present in the raw data source "schema").  Queries may be refined using a set of optional parms ("query=", “include=”, “exclude=”, “sort=”) applied in the           #
+#            order listed.  These parms may be set in "config=<cfg_file>" or on the CLI.  "query=/sort=" parms are "field-specific" meaning they reference field labels           #
+#            defined using "schema=|scope=" parms ("sort=" may only reference "scope=" parm labels).  "include=/exclude=" parms are "field-generic" meaning the regular           #
+#            expression set in "[in|ex]clude=" applies to entire row of data ("target=schema") or to user defined subset of fields for given data row ("target=scope").           #
+#            Most queries are achievable using "query=/sort=" parms ("field-specific").  "[in|ex]clude=" parms ("field-generic") are legacy but may be used if desired.           #
+#            Currently, DataExtr supports 3 delimiters (delim=[,|:|;]) but could be expanded to include any printable character not present as data in raw input file.            #
+#            DataExtr’s primary use case is to be able to quickly & easily provide multiple customized reports from the same raw data source ("rows=<rows>") to address           #
+#            different organizational needs without having to set up a traditional database environment.  Sample chart entries created using different "scope=" values:           #
+#                                                                                                                                                                                 #
+#                 schema="First,Middle,Last,ID_#,Nickname,Title,Dept,Region"           Rows  entry:  Luna,,Mendez,00001,Zampe Bianche,Princess,Royal Court,Tuscony                #
+#                                                                                                                                                                                 #
+#                 Run_01:  scope="ID_#,First,Middle,Last,Title"                        Chart entry:  00001  Luna  _TBD_  Mendez  Princess                                         #
+#                                                                                                                                                                                 #
+#                 Run_02:  scope="First,Middle,Last,ID_#,Title,Dept"                   Chart entry:  Luna  _TBD_  Mendez  00001  Princess  Royal_Court                            #
+#                                                                                                                                                                                 #
+#                 Run_03:  scope="First,Middle,ID_#,Nickname,Title,Dept,Region"        Chart entry:  Luna  _TBD_  00001  Zampe_Bianche  Princess  Royal_Court  Tuscony            #
+#                                                                                                          :::::                                                                  #
+#       Demos:                                                                                             :::::---("_TBD_": <null_field> (raw ",,"): "Middle" name unknown)      #
+#                                                                                                                                                                                 #
+#            DataExtr utility demos available upon request.  Email bluenunn@gmail.com to arrange.                                                                                 #
+#                                                                                                                                                                                 #
+#       Repository:  https://github.com/bluenunn/Toolchest/                                                                                                                       #
+#                                                                                                                                                                                 #
+#            - dataextr_r010_(docs_v01).txt         {DataExtr Users Guide: "Option/Parm" definitions, RegEx support}                                                              #
+#                                                                                                                                                                                 #
+#            - dataextr_r010_(readme_v01).txt       {DataExtr Readme File: sample Syntax, Config, Data, Runs & History File}                                                      #
+#                                                                                                                                                                                 #
+#       Features:                                                                                                                                                                 #
+#                                                                                                                                                                                 #
+#            - Title            title="<title>"                                                       {ex: title="Luna Cutie Pie Mendez Fan Club"}                                #
+#                                                                                                                                                                                 #
+#            - Schema           schema="<schema_$1>,<schema_$2>,...,<schema_$z>"                      {ex: schema="First,Middle,Last,ID_#,Nickname,Title,Dept,Region"}            #
+#                                                                                                                                                                                 #
+#            - Scope            scope="<scope_$1>,<scope_$2>,...,<scope_$n>"                          {ex: scope="ID_#,First,Middle,Last,Title"}                                  #
+#                                                                                                                                                                                 #
+#            - Target           target=[schema|scope]                                                 {ex: target=schema}     (default: target=scope)                             #
+#                                                                                                                                                                                 #
+#            - Query            query='<qry_1> [<&& or ||> <qry_2> ...]'     (single quotes req.)     {ex: query='Title~Princess && First==Luna || Dept==Royal_Court'}            #
+#                                                                                                                                                                                 #
+#            - Include          include="<incl_1>|<incl_2>|...|<incl_n>"                              {ex: include="Royal_Court|Tuscony"}                                         #
+#                                                                                                                                                                                 #
+#            - Exclude          exclude="<excl_1>|<excl_2>|...|<excl_n>"                              {ex: exclude="King|Queen|$clowns"}                                          #
+#                                                                                                                                                                                 #
+#            - Sort             sort="<field_n>[,<field_n+>] [<sort_flags>]"                          {ex: sort="Title,Dept -r" (lexicographic reverse sort)}                     #
+#                                                                                                                                                                                 #
+#            - <null_field>     raw "<fld_$n>,,<fld_$(n+2)>,..."                                      {ex: ",, => _TBD_" ("<null_field> => Chart _TBD_ entry")}                   #
+#                                                                                                                                                                                 #
+#    Permissions:  At the start of each run, utility attempts to remove $history/$chart files (see below) targeted for creation in the same location as a previous                #
+#                  run (rm -rf $chart $history) along with any temporary files ("rm -rf /tmp/datatmp_*") left over from a previous run using "-t" (temporary) option.             #
+#                  Due to permission conflicts, it may be necessary to manually perform these steps prior to a new run, if user id is "<non-root>" and previous run(s)            #
+#                  used "root" or a different "<"non-root"> user id. These manual steps shouldn't be required if each run uses "root" or the same "<non-root>" user id.           #
+#                                                                                                                                                                                 #
+#    Parm Format:  Parms use <parm>=["|']<value>["|'] format.  Following parms whose <value> have embedded white space must be in double quotes (optional if no white space):     #
+#                                                                                                                                                                                 #
+#                       double quote parm <value>:  title=/schema=/scope=/include=/exclude=/sort=     {ex: title="Luna Mendez Fan Club" sort="First,Last -r"}                     #
+#                                                                                                                                                                                 #
+#                  The query= parm <value> must always be enclosed in single quotes (no exceptions, results are unpredictable if this is not done):                               #
+#                                                                                                                                                                                 #
+#                       single quote parm <value>:  query=                                            {ex: query='ID_#>=10 && Continent~North_America || Last~Mendez'}            #
+#                                                                                                                                                                                 #
+#                  The "query=" parm <value> is a series of one or more evaluations seperated by zero or more connectors ("&&": AND, "||": OR).  Query evaluations                #
+#                  use format <label><oper>["]<regex>["] (<oper>s: "~, !~, ==, !=, >=, <=, >, <").  If a query <regex> has embedded white space it must be in double              #
+#                  quotes (ex: query='ID_#>=10 && Dept~"Royal Court"').  If query <regex> has no embedded white space, double quoting <regex> is optional. Examples:              #
+#                                                                                                                                                                                 #
+#                       ./dataextr -dfi  ... query='id_#>=10   && continent~north_America   || last~mendez'       # {<value>s: no white space, double quotes not used}            #
+#                       ./dataextr -dfi  ... query='id_#>="10" && continent~"north_America" || last~"mendez"'     # {<value>s: no white space, double quotes optional}            #
+#                       ./dataextr -dfir ... query='id_#>=10   && continent~"north America" || last~mendez'       # {<value>s: double quotes for white spaced values}             #
+#                                                                                                                                                                                 #
+#         Syntax:  ./dataextr [-dfirt] [<parms>]     # {-<options>: do not enclose in quotes, <parm>=["|']<value>["|'] (see "Parm Format:" regarding use of quotes)}              #
+#                               :::::                                                                                                                                             #
+#        Options:               :::::----("-t": "temporary"   - Optional, utility "${tmp}_..." ("/tmp/datatmp_...") work files (if any) are not removed at end of execution.)     #
+#                               ::::-----("-r": "raw"         - Optional, filter raw $rows content prior to " " => "_" conversion (ex: # "North America" vs "North_America".)     #
+#                               :::------("-i": "ignore-case" - Optional, "case insensitive" A) "$schema/$scope" label compares and B) "query=/include=/exclude=" searches.)      #
+#                               ::-------("-f": "fields"      - Optional, utility returns Option <settings> & Parm <values>, <sources> ([def|cfg|cli|sch]) in History file.)      #
+#                               :--------("-d": "display"     - Optional, display formatted organization chart output file ("$chart") to screen at end of execution.)             #
+#                                                                                                                                                                                 #
+#          Parms:  [dir=<dir>]           - Optional, utility stage directory ($dir), default if parm is not specified is "dir=<current_working_directory>".                       #
+#                                          $dir is where utility looks for any prestaged input or output files.  "dir=" may be overridden by coding fully                         #
+#                                          qualified file path name inside of CLI parm (ex: "./dataextr dir=/users/bnunn ... chart=/tmp/dataextr_chart ...").                     #
+#                                          In this example, utility places "chart=<chart>" output file in "/tmp" directory instead of "/users/bnunn".                             #
+#                                          "partially" (ex: "fan_clubs/chart_luna") or "unqualified" ("chart_luna") file path names are prefixed with $dir.                       #
+#                                          Default "dir=" default may only be overriden using CLI.  If "dir=" is set in $config file, setting is ignored.                         #
+#                                                                                                                                                                                 #
+#                  [config=<config>]     - Optional, utility config file ($config), default if parm is not specified is "config=${dir}/dataextr_config".                          #
+#                                          Each parm described below this point may be defined inside utility's $config file by specifying <parm>=<parm_def>.                     #
+#                                          Any <parm_def> with embedded white space should be enclosed in double quotes (ex: title="Princess Luna Mendez Fan Club").              #
+#                                          When defining a parm, certain characters (ex "!") may return an error when double quotes are used (ex: title="...!!!"                  #
+#                                          returns error message "-bash: !": event not found" without setting parm value (over time you'll learn the forbidden chars).            #
+#                                          If same parm is set on CLI and in $config file, the CLI definition takes precedence.  Sample $config file shown below.                 #
+#                                          Default "config=" default may only be overriden using the CLI.  If "config=" is set in $config file, setting is ignored.               #
+#                                          Utility only supports options (ex: "./<utility> -dist <parms>") on the CLI.  Options defined in $config file are ignored.              #
+#                                          "<parm>=" (e.g. parm name to left of equal sign) must be lower case (ex: title='...' works, Title='...' not recognized).               #
+#                                                                                                                                                                                 #
+#                  [title="<title>"]     - Optional, organization chart title ($title), default if parm is not specified, is to create chart without a title.                     #
+#                                          For clarity, enclose $title containing embedded white space in quotes (ex: title='Luna Cutie Pie Mendez Fan Club').                    #
+#                                                                                                                                                                                 #
+#                  [delim=<delim>]       - Optional, raw data input file field delimiter ($delim).  Default data field delimiter if parm not specified is comma (",").            #
+#                                          "delim=" defines single character used to delimit fields in $rows raw data input file (current supported chars: ":" "," ";").          #
+#                                                                                                                                                                                 #
+#                  [history=<history>]   - Optional, utility history file (timestamps, data source, commands, RCs, STD_ERR msgs).  Default: ${dir}dataextr_history.               #
+#                                                                                                                                                                                 #
+#                  [rows=<rows>]         - Optional, raw text ",|:|;" delimited data source file ($rows).  Default if parm not specified is "rows=${dir}/dataextr_rows".          #
+#                                          If a field within a data row record is unknown, it may be designated as a "<null>" field as follows.  Example:                         #
+#                                                                                                                                                                                 #
+#                                               ","  - 1st (<field_$1>) to left of 1st ":" is unknown                     {ex: ",<field_$2>,<field_$3>,...,<field_last>"}         #
+#                                                                                                                                                                                 #
+#                                               ",," - mid (ex: <field_$2>) between consecutive "::"s is unknown          {ex: "<field_$1>,,<field_$3>,...,<field_last>"}         #
+#                                                                                                                                                                                 #
+#                                                "," - last field to right of last ":" is unknown                         {ex: "<field_$1>,<field_$2>,<field_$3>,...,"}           #
+#                                                                                                                                                                                 #
+#                                          Each data row must have same # of fields ("<null>" fields included in tally) where "#_fields/row = (<#_delims> + 1)/row".              #
+#                                          "#_fields/row" must also match number of field labels defined in "schema=" parm ($schema) described below.  Verify that                #
+#                                          each data row in $rows is a single record.  Long rows may span multiple lines using word wrap with a single <new_line>                 #
+#                                          at the end of the record for each row.  Utility does not modify content of raw $rows data file.                                        #
+#                                                                                                                                                                                 #
+#                  [chart=<chart>]       - Optional, formatted chart output file ($chart).  Default if parm is not defined is "chart=${dir}/dataextr_chart".                      #
+#                                          Any occurrences of [contiguous] embedded white space present in any of the parms used to create chart become "_"                       #
+#                                          (ex: $rows "...:Royal Court:..." field becomes "Royal_Court" in chart).                                                                #
+#                                                                                                                                                                                 #
+#                  [schema="<schema>"]   - Required, "#/order" of fields per raw data row ($schema).  "schema=" must be set at least once (in $config file "&/or" on CLI).        #
+#                                          $schema is a CSV list of field labels (ex: schema="First,Middle,Last,ID_#,Nickname,Title,Dept,Region").  If any schema labels          #
+#                                          contain embedded white space, you will need to enclose the CSV list in "double" quotes in order to protect it from the shell.          #
+#                                          (ex: schema="First Name,Middle Name,Last Name,ID_#,Nickname,Title,Dept,Region").  $schema must exist for a successful run.             #
+#                                          If "schema=" is set both on CLI & in $config file, CLI takes precedence.  If "-i" option is set, "$schema <=> $scope" references       #
+#                                          are case insensitive, ex: "scope=id_#,first,middle,..." match related "schema=First,Middle,Last,ID_#,..." field labels.  Define        #
+#                                          $schema as single record (e.g. don't use <Enter> key in middle of "schema=...").  Line wrap is ok for long schema definitions.         #
+#                                                                                                                                                                                 #
+#                  [scope="<scope>"]     - Optional, "#/order" of data fields included in chart ($scope).  Default if parm is not defined is to set $scope equal to $schema.      #
+#                                          $scope is a CSV list of field labels (ex: scope=First,Middle,Last,ID_#,Title,Dept).  If any schema labels contain embedded white       #
+#                                          space, you will need to enclose the CSV list in "double" quotes in order to protect it from the shell.  If "scope=" is on CLI &        #
+#                                          in $config file, CLI takes precedence.  If "scope=" is not set, then $scope and $schema are identical (both "#/order" of fields).      #
+#                                          If set, $scope may be a subset or complete set of $schema field labels in any order.  If "-i" option is set, "$schema <=> $scope"      #
+#                                          references are case insensitive, ex: "scope=id_#,first,middle,..." match related "schema=First,Middle,Last,ID_#,..." field labels.     #
+#                                          Define $scope as single record (e.g. don't use <Enter> key in middle of "scope=...").  Line wrap is ok for long scope definitions.     #
+#                                                                                                                                                                                 #
+#                  [target=<target>]     - Optional, apply filter parms to "[scope|schema]" ($target).  If "target=" is set on CLI & in $config file, CLI takes precedence.       #
+#                                          "target=" has one of two values: "scope" (default) or "schema".  Parm defines object ("scope" or "schema") that "filter" related       #
+#                                          parms ("query=", "include=", "exclude=") are applied to.  "$scope" & "$schema" define field labels.  The actual data entries that      #
+#                                          are filtered reside in $rows input file ("target=schema") or $chart output file ("target=scope").  Setting "target=schema" allows      #
+#                                          filters ("query=", include=", "exclude=" parms) to be applied to all fields in the raw $rows data file even if some of the fields      #
+#                                          are not included in final output per "scope=<scope>" setting.  "sort=" parm may only be applied to field labels defined in $scope      #
+#                                          ("scope=" parm or "schema=" parm if "scope=" is not defined).                                                                          #
+#                                                                                                                                                                                 #
+#                  [query='<query>']     - The "query=" parm <value> is a series of one or more evaluations seperated by zero or more connectors ("&&": AND, "||": OR).           #
+#                                          Query evaluations use format <label><oper>["]<regex>["] (<oper>s: "==, !=, <, <=, >, >=, ~, !~).  If the query <regex> contains        #
+#                                          embedded white space it must be in double quotes (ex: query='ID_#>=10 && Dept~"Royal Court"').  If query <regex> has no embedded       #
+#                                          white space, double quoting <regex> is optional.  Query evaluation connectors (&& (AND), || (OR)) are used to connect a series:        #
+#                                                                                                                                                                                 #
+#                                               && (AND): <eval_1> && <eval_2> [... && <eval_n>]             {>= 2 <eval>s, each <eval> must be true for series to be true}       #
+#                                                                                                                                                                                 #
+#                                               || (OR):  <eval[_series_1] || <eval[_series_2]>[ || ...]     {>= 2 <eval[_series]>s, if 1 is true, <||_eval_series> is true}      #
+#                                                                                                                                                                                 #
+#                                          There are 8 operators (<oper>s) & 1 sub-operator (<single_OR>) supported for query evaluations (<label><oper>["]<regex>["]):           #
+#                                                                                                                                                                                 #
+#                                                                                           :::::::::---("exactly": Options "-i/-r" modify equality "exactness" reqs.)            #
+#                                                                                           :::::::::                                                                             #
+#                                               ==   equal:                 <label>'s field "exactly" equals ["]<regex>["]             {use: "lexicographic/numeric" <eval>s}     #
+#                                               !=   not_equal:             <label>'s field does not "exactly" equal ["]<regex>["]     {use: "lexicographic/numeric" <eval>s}     #
+#                                                                                                                                                                                 #
+#                                               <    less_than:             <label>'s field is less than ["]<regex>["]                 {typical use: numeric <eval>s}             #
+#                                               <=   less_than_or_equal:    <label>'s field is less than ["]<regex>["]                 {typical use: numeric <eval>s}             #
+#                                                                                                                                                                                 #
+#                                               >    greater_than:          <label>'s field is greater than ["]<regex>["]              {typical use: numeric <eval>s}             #
+#                                               >=   greater_than_or_equal: <label>'s field is greater than or equal ["]<regex>["]     {typical use: numeric <eval>s}             #
+#                                                                                                                                                                                 #
+#                                                ~   match:                 <label>'s field matches ["]<regex>["]                      {typical use: lexicographic <eval>s}       #
+#                                               !~   not_match:             <label>'s field does not match ["]<regex>["]               {typical use: lexicographic <eval>s}       #
+#                                                                                                                                                                                 #
+#                                                    |    <single_OR>       <sub-oper>: use with "~" or "!~" operators                 {(ex: query='Title~King|Queen|Prin')}      #
+#                                                                                                                                                                    ::::         #
+#                                                                                                  ("Prin": partial string "Prin" would match Title of "Princess")---::::         #
+#                                          Sample queries:                                                                                                                        #
+#                                                                                                                                                                                 #
+#                                               Rows entry:  Luna,,Mendez,00001,Zampe Bianche,Princess,Royal Court,Calabria,Italy,Europe,2019                                     #
+#                                                                                                                                                                                 #
+#                                               <Cfg_file>:  schema="First,Middle,Last,ID_#,Nickname,Title,Dept,Region,Country,Continent,Birth_yr"                                #
+#                                                                                                                                                                                 #
+#                                               <Cfg_file>:  scope="ID_#,First,Last,Title,Dept,Region,Country,Continent,Birth_yr"                                                 #
+#                                                                                                                                                                                 #
+#                                               Chart entry: 00001  Luna  Mendez  Princess  Royal_Court  Italy  Europe  2019                                                      #
+#                                                                                                                                                                                 #
+#                                                                               :---(query always requires single quotes)---:                                                     #
+#                                                                               :                                           :                                                     #
+#                                                    ./dataextr -dfi  ... query='id_#>=10 && dept~royal_court || last~mendez'           {Run_01: double quotes not used}          #
+#                                                                                                                                                                                 #
+#                                                    ./dataextr -dfi  ... query='id_#>="10" && dept~"royal_court" || last~"mendez"'     {Run_02: double quotes optional}          #
+#                                                                                                                                                                                 #
+#                                                    ./dataextr -dfir ... query='id_#>=10 && dept~"royal court" || last~mendez'         {Run_03: partially double quoted}         #
+#                                                                  :|                             :::::::::::::                                                                   #
+#                                                                  :|                             :::::::::::::---("royal court": white space requires double quotes)             #
+#                                                                  :|                                                                                                             #
+#                                                                  :|---("-r" (raw) set (1):  raw Rows entry evaluated before "white space => _" conversion)                      #
+#                                                                  :|                                                                                                             #
+#                                                                  :|---(If "-r" not set (0): white space in fields ~ "_" (ex: field "Royal Court ~ Royal_Court" <regex>))        #
+#                                                                  []                                                                                                             #
+#                                                                  []---("-ir" (ignore-case/raw): "label/field" UPPER/lower case <eval>s (ex: "Royal Court ~ royal court"))       #
+#                                                                                                                                                                                 #
+#                  [include="<include>"] - Optional, chart "include" regex search list ($include).  If "include=" is set on CLI & in $config file, CLI takes precedence.          #
+#                                          $include is a "|" delimited list of regex based search arguments (ex: include="Royal_|Tuscony").  "include=" parm is applied           #
+#                                          to $target object ("scope|schema") exactly as it is defined unless "-i" ("ignore-case) option is set in which case $include            #
+#                                          become case insensitive (ex: "-i ... include="royal_|tuscony" would match field values of "Royal_Court" and "Tuscony".                 #
+#                                                                                                                                                                                 #
+#                                          "include=" regex search arguments support "basic/extended" meta characters & PBEs (Posix Bracket Expressions, see below).              #
+#                                          If "-r" (raw) is set,   "include=" searches must match raw data including white space (ex: include="  North  America  ").              #
+#                                          If "-r" (raw) not used, "include=" searches are applied after "white space => _" conversion (ex: include="North_America").             #
+#                                          If "-i" (insensitve) is set, searches may be in upper or lower case (ex: "-i" include=North_America or include=north_america).         #
+#                                          The <regex> defined by "include=" may optionally be enclosed in double quoutes for clarity (useful for embedded white space).          #
+#                                          Sample matching include="<regex1[|<regex2>|..." values ("target=[schema|scope]" records are printed to Chart output file):             #
+#                                                                                                                                                                                 #
+#                                               Rows entry:  Luna,,Mendez,00001,Zampe Bianche,Princess,Royal Court,Tuscony                                                        #
+#                                                                                                                                                                                 #
+#                                                    ./dataextr     ... include="Zampe_|Royal_Court"                # {case sensitive,     not raw (e.g. " " => "_")}             #
+#                                                    ./dataextr -i  ... include="zampe_|royal_court"                # {"-i":  ignore-case, not raw (e.g. " " => "_")}             #
+#                                                    ./dataextr -ir ... include="zampe |royal court"                # {"-ir": ignore-case, raw (white space sensitive)}           #
+#                                                    ./dataextr -ir ... include="zampe |royal[[:blank:]]+court"     # {"[[:blank:]]+": >=1 occurrences of white space}            #
+#                                                                                                                                                                                 #
+#                  [exclude="<exclude>"] - Optional, chart "exclude" regex search list ($exclude).  If "exclude=" is set on CLI & in $config file, CLI takes precedence.          #
+#                                          $exclude is a "|" delimited list of regex based search arguments (ex: exclude="Royal_|Tuscony").  "exclude=" parm is applied           #
+#                                          to $target object ("scope|schema") exactly as it is defined unless "-i" ("ignore-case) option is set in which case $exclude            #
+#                                          become case insensitive (ex: "-i ... exclude="royal_|tuscony" would match field values of "Royal_Court" and "Tuscony".                 #
+#                                                                                                                                                                                 #
+#                                          "exclude=" regex search arguments support "basic/extended" meta characters & PBEs (Posix Bracket Expressions, see below).              #
+#                                          If "-r" (raw) is set,   "exclude=" searches must match raw data including white space (ex: include="  North  America  ").              #
+#                                          If "-r" (raw) not used, "exclude=" searches are applied after "white space => _" conversion (ex: include="North_America").             #
+#                                          If "-i" (insensitve) is set, searches may be in upper or lower case (ex: "-i" exclude=North_America or exclude=north_america).         #
+#                                          The <regex> defined by "exclude=" may optionally be enclosed in double quoutes for clarity (useful for embedded white space).          #
+#                                          Sample matching exclude="<regex1[|<regex2>|..." values ("target=[schema|scope]" records are not printed to Chart output file):         #
+#                                                                                                                                                                                 #
+#                                               Rows entry:  Luna,,Mendez,00001,Zampe Bianche,Princess,Royal Court,Tuscony                                                        #
+#                                                                                                                                                                                 #
+#                                                    ./dataextr     ... exclude="Zampe_|Royal_Court"                # {case sensitive,     not raw (e.g. " " => "_")}             #
+#                                                    ./dataextr -i  ... exclude="zampe_|royal_court"                # {"-i":  ignore-case, not raw (e.g. " " => "_")}             #
+#                                                    ./dataextr -ir ... exclude="zampe |royal court"                # {"-ir": ignore-case, raw (white space sensitive)}           #
+#                                                    ./dataextr -ir ... exclude="zampe |royal[[:blank:]]+court"     # {"[[:blank:]]+": >=1 occurrences of white space}            #
+#                                                                                                                                                                                 #
+#                  [sort="<sort>"]       - Optional, sort chart table entries by field content ($sort).  If "sort=" is set on CLI & in $config file, CLI takes precedence.        #
+#                                          $sort is CSV list of 1 or 2 schema labels followed by one or more optional sort flags supported by "sort" command on the Unix          #
+#                                          server utility is being run on (use "man sort" to verify sort flags support).  "sort=" parm may only reference fields defined          #
+#                                          by $scope (e.g. field labels in "scope=" parm or "schema=" parm if "scope=" is not defined).  If a <non-scope> field label is          #
+#                                          used in "sort=" parm, utility will exit with non-zero return code & Std_Err message is captured in History file.  By default,          #
+#                                          function uses sort command flags "-t , -k<col_m>[,<col_n>]" so these should not be added as additional flags to "sort=" parm.          #
+#                                          If value to right of equal sign has embedded white space, it must be enclosed in double quotes to be interpreted correctly.  If        #
+#                                          value does not have any embeddedd white space, double quotes may still be used but are optional.  Sample "sort=" parm settings:        #
+#                                                                                                                                                                                 #
+#                                               Rows entry:  Luna,,Mendez,00001,Zampe Bianche,Princess,Royal Court,Calabria,Italy,Europe,2019                                     #
+#                                                                                                                                                                                 #
+#                                               <Cfg_file>:  schema="First,Middle,Last,ID_#,Nickname,Title,Dept,Region,Country,Continent,Birth_yr"                                #
+#                                                                                                                                                                                 #
+#                                               <Cfg_file>:  scope="ID_#,First,Last,Title,Dept,Region,Country,Continent,Birth_yr"                                                 #
+#                                                                                                                                                                                 #
+#                                               Chart entry: 00001  Luna  Mendez  Princess  Royal_Court  Italy  Europe  2019                                                      #
+#                                                                                                                                                                                 #
+#                                                                              :::::-::::---("first,last": <non-digit-only> fields use lexicographic sort)                        #
+#                                                                              ::::: ::::                                                                                         #
+#                                                    ./dataextr -dfi ... sort="first,last"        # {"lexi" forward sort}                                                         #
+#                                                    ./dataextr -dfi ... sort="first,last -r"     # {"lexi" reverse sort}                                                         #
+#                                                    ./dataextr -dfi ... sort="id_#"              # {numeric forward sort}                                                        #
+#                                                    ./dataextr -dfi ... sort="id_# -n"           # {numeric forward sort}                                                        #
+#                                                    ./dataextr -dfi ... sort="id_# -n -r"        # {numeric reverse sort}                                                        #
+#                                                                              :::: :: ::                                                                                         #
+#                                                                              :::: :: ::---("-r": reverse sort flag)                                                             #
+#                                                                              :::: ::                                                                                            #
+#                                                                              ::::-::------("id_# [-n]": <digit-only> fields formatted as "%d" (decimal))                        #
+#                                                                              ::::-::------("id_# [-n]": %d sorts are "numeric" even if "-n" flag not set)                       #
+#                                                                                                                                                                                 #
+#          DataExtr RegEx Support:                {"query=/include=/exclude=" parms}                                                                                              #
+#                                                                                                                                                                                 #
+#               "basic" Meta Characters:                                                                                                                                          #
+#                                                                                                                                                                                 #
+#                        . - matches any single character                                                                                                                         #
+#                                                                                                                                                                                 #
+#                        * - matches zero or more occurences of preceeding single character.                                                                                      #
+#                                                                                                                                                                                 #
+#                    [...] - character class, "^" as 1st char inside class = reverse match.                                                                                       #
+#                                                                                                                                                                                 #
+#                        ^ - match beginning of line                                                                                                                              #
+#                                                                                                                                                                                 #
+#                        $ - match end of line                                                                                                                                    #
+#                                                                                                                                                                                 #
+#               "extended" Meta Characters:                                                                                                                                       #
+#                                                                                                                                                                                 #
+#                        ? - matches 0 or 1 occurences of preceeding regular expression.                                                                                          #
+#                                                                                                                                                                                 #
+#                        + - matches 1 or more occurences of preceeding regular expression.                                                                                       #
+#                                                                                                                                                                                 #
+#                        | - alternation, preceeding or following regex can be matched.                                                                                           #
+#                                                                                                                                                                                 #
+#                       () - group regular expressions.                                                                                                                           #
+#                                                                                                                                                                                 #
+#                    {n,m} - matches range of preceeding single character (inc regex).                                                                                            #
+#                                                                                                                                                                                 #
+#                          - {n} matches exactly "n" occurences                                                                                                                   #
+#                                                                                                                                                                                 #
+#                          - {n,} matches at least "n" occurences                                                                                                                 #
+#                                                                                                                                                                                 #
+#                          - {n,m} matches any number of occurences "n-m" for POSIX egrep/awk                                                                                     #
+#                                                                                                                                                                                 #
+#               PBEs (Posix Bracket Expressions):                                                                                                                                 #
+#                                                                                                                                                                                 #
+#                    POSIX (Portable Operating System Interface):                                                                                                                 #
+#                                                                                                                                                                                 #
+#                         The Portable Operating System Interface (POSIX)[1] is a family of standards specified by the IEEE Computer Society for maintaining                      #
+#                         compatibility between operating systems. POSIX defines the application programming interface (API), along with command line shells                      #
+#                         and utility interfaces, for software compatibility with variants of Unix and other operating systems.                                                   #
+#                                                                                                                                                                                 #
+#                         Originally, the name "POSIX" referred to IEEE Std 1003.1-1988, released in 1988. The family of POSIX standards is formally designated                   #
+#                         as IEEE 1003 (international standard is ISO/IEC 9945.  The standards emerged from a project that began circa 1985. Richard Stallman                     #
+#                         suggested the name POSIX to the IEEE instead of former IEEE-IX. Committee found it more pronounceable and memorable and adopted it.                     #
+#                                                                                                                                                                                 #
+#                    Links:                                                                                                                                                       #
+#                                                                                                                                                                                 #
+#                         Regular-Expressions.info: http://www.regular-expressions.info/posixbrackets.html                                                                        #
+#                                                                                                                                                                                 #
+#                         Regexp Ranges and Locales: A Long Sad Story: http://www.gnu.org/software/gawk/manual/gawk.html#Ranges-and-Locales                                       #
+#                                                                                                                                                                                 #
+#                         Regex Tutorial - Posix Bracket Expressions:  http://allregex.com/tutorials/posix-bracket-expressions                                                    #
+#                                                                                                                                                                                 #
+#                              Support:                                                                                                                                           #
+#                                                                                                                                                                                 #
+#                                   - Posix bracket expressions are supported in Perl, PHP, Ruby, Unix (including awk & egrep)                                                    #
+#                                                                                                                                                                                 #
+#                                   - Posix bracket expressions are not supported in Java, Javascript, .NET, Python                                                               #
+#                                                                                                                                                                                 #
+#                    Posix Bracket Expression Table:                                                                                                                              #
+#                                                                                                                                                                                 #
+#                           Posix                            Description                              ASCII             Unicode        Shorthand      Java                        #
+#                         ---------   --------------------------------------------------------   ---------------   -----------------   ---------   ----------                     #
+#                         [:alnum:]    Alphanumeric characters                                   [a-zA-Z0-9]       [\p{L&}\p{Nd}]                  \p{Alnum}                      #
+#                                                                                                                                                                                 #
+#                         [:alpha:]    Alphabetic characters                                     [a-zA-Z]          \p{L&}                          \p{Alpha}                      #
+#                                                                                                                                                                                 #
+#                         [:ascii:]    ASCII characters                                          [\x00-\x7F]       \p{InBasicLatin}                \p{ASCII}                      #
+#                                                                                                                                                                                 #
+#                         [:blank:]    Space and tab                                             [ \t]             [\p{Zs}\t]           \h         \p{Blank}                      #
+#                                                                                                                                                                                 #
+#                         [:cntrl:]    Control characters                                        [\x00-\x1F\x7F]   \p{Cc}                          \p{Cntrl}                      #
+#                                                                                                                                                                                 #
+#                         [:digit:]    Digits                                                    [0-9]             \p{Nd}               \d         \p{Digit}                      #
+#                                                                                                                                                                                 #
+#                         [:graph:]    Visible characters                                        [\x21-\x7E]       [^\p{Z}\p{C}]                   \p{Graph}                      #
+#                                                                                                                                                                                 #
+#                         [:lower:]    Lowercase letters                                         [a-z]             \p{Ll}                          \p{Lower}                      #
+#                                                                                                                                                                                 #
+#                         [:print:]    Visible characters and spaces                             [\x20-\x7E]       \P{C}                           \p{Print}                      #
+#                                      (i.e. anything except control characters, etc.)                                                                                            #
+#                                                                                                                                                                                 #
+#                         [:punct:]    Punctuation and symbols.                                  [!"#$%&'()*+,     [\p{P}\p{S}]                    \p{Punct}                      #
+#                                                                                                \-./:;<=>?@,                                                                     #
+#                                                                                                [\\\]^_`{|}~]                                                                    #
+#                                                                                                                                                                                 #
+#                         [:space:]    All white space characters                                [ \t\r\n\v\f]     [\p{Z}\t\r\n\v\f]    \s         \p{Space}                      #
+#                                      (including line breaks)                                                                                                                    #
+#                                                                                                                                                                                 #
+#                         [:upper:]    Uppercase letters                                         [A-Z]             \p{Lu}                          \p{Upper}                      #
+#                                                                                                                                                                                 #
+#                         [:word:]     Word characters                                           [A-Za-z0-9_]     [\p{L}\p{N}\p{Pc}]    \w                                        #
+#                                      (letters, numbers and underscores)                                                                                                         #
+#                                                                                                                                                                                 #
+#                         [:xdigit:]   Hexadecimal digits                                        [A-Fa-f0-9]      [A-Fa-f0-9]                      \p{XDigit}                     #
+#                                                                                                                                                                                 #
+#                    <Sample use of "[:upper:]" & "[:digit:]" PBEs to form character classes ([...])>                                                                             #
+#                                                                                                                                                                                 #
+#                         awk '$1~/^[[:upper:][:digit:]]/'{<code>}'       {ex: $1 starts with an upper case letter ("A-Z") or a digit ("0-9")}                                    #
+#                                   :                  :                                                                                                                          #
+#                                   :------------------:------------------(enclose in a single "[...]" bracket set to form a single char class (matches "A-Z0-9")                 #
+#                                                                                                                                                                                 #
+#                         awk '$1~/^[[:upper:]][[:digit:]]/'{<code>}'     {ex: $1 starts with an upper case letter ("A-Z") followed by a digit ("0-9")}                           #
+#                                   :         :|         |                                                                                                                        #
+#                                   :---------:|---------|----------------(enclose in seperate "[...][...]" bracket sets to form two distinct char classes: "A-Z" & "0-9")        #
+#                                                                                                                                                                                 #
+#                         For awk, use Posix bracket expressions in place of traditional ASCII letter ranges to form "lower/UPPER" case character classes.                        #
+#                         Not doing so may cause unexpected filtering results on hosts using non-ASCII locales (ex: $LANG = Unicode locale "en_US.UTF-8").                        #
+#                         If a subset of lower or upper case letters needs to be matched in awk, they may be explicitly specified (e.g. don't use "-" in                          #
+#                         char class).  Ex:  awk '$1~/[aBcDeF]/{...}' would correctly match lower case "[ace]" and upper case "[BDF]" in "$1" of record).                         #
+#                         Use of "[a-z]" in awk might also match UPPER case range "A-Z" & use of "[A-Z]" in awk might also match lower case range "a-z".                          #
+#                                                                                                                                                                                 #
+###################################################################################################################################################################################
