@@ -8,7 +8,7 @@ GitHub Repository:  https://github.com/bluenunn/Toolchest/
 
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
-dataextr_r010_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
+dataextr_r010_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
 
 dataextr_r010_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
