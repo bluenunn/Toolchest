@@ -1,0 +1,206 @@
+
+File: mds_fc_tran_det_proc_r002.txt                           {Modified: 02/05/20, Created: 02/03/20, Author: Bill Nunn}
+
+Overview:
+
+     Use this procedure to verify compatibility of MDS FC module SFPs are compatible with the FC module they are installed in.
+     Incompatible SFPs may result in "show int br" "errDisabled|suspended|..." errors.
+
+Collect "show int <fc_/__> transceiver detail" data:          {<ID>@<host>: run from trusted MDS host (ex: admin@oz101-san-mgr1)}
+
+     # "$sw_fc" format: <MDS_switch>:<FC_intfc> (ex: "oz101-san-ew7:fc3/15")
+
+     for sw_fc in $(cat sw_fc_all_oz101);do
+
+          sw=$(echo $sw_fc | awk '{split($1,ary_sw_fc,":");print ary_sw_fc[1]}')
+
+          fc=$(echo $sw_fc | awk '{split($1,ary_sw_fc,":");print ary_sw_fc[2]}')
+
+          echo "MDS: ${sw}";ssh -q $sw "show int $fc transceiver detail"
+
+     done > tran-det_all_oz101_$(date '+%Y-%m-%d_%Z')
+
+Format "show int <fc_/__> transceiver detail" data:
+
+     dir=/tmp/                                         # {"$dir": Tailor if needed, data collection stage directory (include trailing "/")}
+
+     raw=${dir}tran-det_all_oz101_2020-02-05_GMT       # {"$raw": Tailor raw MDS "show int <FC_intfc> transceiver detail" data file}
+     fmt=${raw}_fmt                                    # {"$fmt": If desired, tailor formatted <FC_intfc> "transceiver detail" table}
+
+     awk                                'BEGIN {print "MDS_Interface Status Cisco_Name OEM_PN Cisco_PN Cisco_PID Speed_min Speed_max"}
+                                    $1=="MDS:" {sw=$2}
+                                 $0~/^fc[0-9]/ {
+                                                fc=$1
+                                                intfc=sw"-"fc
+                                                status="<"$2"_"$3"_"$4">"
+                                                if (status!="<sfp_is_present>") {
+                                                                                 cisco_name="-"
+                                                                                 oem_pn="-"
+                                                                                 cisco_pn="-"
+                                                                                 cisco_pid="-"
+                                                                                 speed_min="-"
+                                                                                 speed_max="-"
+                                                                                 print intfc,status,cisco_name,oem_pn,cisco_pn,cisco_pid,speed_min,speed_max
+                                                                                 }
+                                               }
+                                  $0~/Name is/ {if (NF==3) {cisco_name=$NF} else {cisco_name="<unknown>"}}
+          $0~/Manufacturer\47s part number is/ {if (NF==5) {oem_pn=$NF}     else     {oem_pn="<unknown>"}}
+                     $0~/Cisco part number is/ {if (NF==5) {cisco_pn=$NF}   else   {cisco_pn="<unknown>"}}
+                             $0~/Cisco pid is/ {if (NF==4) {cisco_pid=$NF}  else  {cisco_pid="<unknown>"}}
+                     $0~/Supported speeds are/ {
+                                                speed_min=$7"_"$8
+                                                sub(/,/,"",speed_min)
+                                                speed_max=$11"_"$12
+                                                print intfc,status,cisco_name,oem_pn,cisco_pn,cisco_pid,speed_min,speed_max
+                                               }' $raw | column -t > $fmt
+
+Sample Output ($fmt):
+
+     MDS_Interface          Status             Cisco_Name     OEM_PN            Cisco_PN    Cisco_PID        Speed_min  Speed_max
+     oz101-san-ew7-fc1/1    <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-ew7-fc1/2    <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     <...>
+     oz101-san-ew7-fc1/11   <sfp_not_present>  -              -                 -           -                -          -
+     oz101-san-ew7-fc1/12   <sfp_not_present>  -              -                 -           -                -          -
+     <...>
+     oz101-san-ew7-fc3/47   <sfp_is_present>   CISCO-AVAGO    AFBR-57F5PZ-CS1   10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-ew7-fc3/48   <sfp_is_present>   CISCO-AVAGO    AFBR-57F5PZ-CS1   10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     <...>
+     oz101-san-ew8-fc1/14   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-ew8-fc1/15   <sfp_is_present>   CISCO-FINISAR  FTLF8524P2BNL-C2  10-2195-01  DS-SFP-FC4G-SW   1000_Mb/s  4000_Mb/s      <=== {check}
+     oz101-san-ew8-fc1/16   <sfp_is_present>   CISCO-AGILENT  QFBR-5784L        <unknown>   <unknown>        1000_Mb/s  2000_Mb/s      <=== {check}
+     oz101-san-ew8-fc1/17   <sfp_is_present>   CISCO-FINISAR  FTRJ8519P1BNL-CS  <unknown>   <unknown>        1000_Mb/s  2000_Mb/s      <=== {check}
+     oz101-san-ew8-fc1/18   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-ew8-fc1/19   <sfp_not_present>  -              -                 -           -                -          -
+     oz101-san-ew8-fc1/20   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     <...>
+     oz101-san-ew8-fc3/47   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-ew8-fc3/48   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-gsw3-fc1/1   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-gsw3-fc1/2   <sfp_is_present>   CISCO-AVAGO    AFBR-57F5PZ-CS1   10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     <...>
+     oz101-san-gsw3-fc3/47  <sfp_not_present>  -              -                 -           -                -          -
+     oz101-san-gsw3-fc3/48  <sfp_not_present>  -              -                 -           -                -          -
+     oz101-san-gsw4-fc1/1   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-gsw4-fc1/2   <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     <...>
+     oz101-san-gsw4-fc2/27  <sfp_is_present>   CISCO-FINISAR  FTLF8529P3BCV-CS  10-2666-01  DS-SFP-FC16G-SW  4000_Mb/s  16000_Mb/s
+     oz101-san-gsw4-fc2/28  <sfp_is_present>   CISCO-FINISAR  FTRJ8519P1BNL-CS  <unknown>   <unknown>        1000_Mb/s  2000_Mb/s      <=== {"check"}
+     <...>                                                                                                                                   :::::
+                                   ("show module": 48 port FC module audited "2/4/8/10/16 Gbps Advanced FC Module DS-X9448-768K9")-----------:::::
+                                   ("show int br": older SFPs may cause "errDisabled|suspended|..." states in newer MDS FC modules)----------:::::
+
+    *Note: After audit, all non conformant SFPs were replaced with Cisco PN: 10-2666-01, PID: DS-SFP-FC16G-SW, Range: 4000-16000 Mb/s)
+       
+Sample "$sw_fc" file:
+
+     oz101-san-mgr1:/tmp $ echo 13*48                     # {"624": <#_FC_ports> in 13 x 48 FC port modules across 4 x MDS}
+     624
+
+     oz101-san-mgr1:/tmp $ wc -l sw_fc_all_oz101          # {"624": <#> of <MDS_switch>:<FC_intfc> pairs in entry file}
+     624
+
+     oz101-san-mgr1:/tmp $ view sw_fc_all_oz101           # {"$sw_fc": <MDS_switch>:<FC_intfc> for loop data collection variable}
+     oz101-san-ew7:fc1/1
+     oz101-san-ew7:fc1/2
+     <...>
+     oz101-san-ew7:fc4/47
+     oz101-san-ew7:fc4/48
+     oz101-san-ew8:fc1/1
+     oz101-san-ew8:fc1/2
+     oz101-san-ew8:fc1/3
+     <...>
+     oz101-san-gsw3:fc3/47
+     oz101-san-gsw3:fc3/48
+     oz101-san-gsw4:fc1/1
+     oz101-san-gsw4:fc1/2
+     <...>
+     oz101-san-gsw4:fc3/47
+     oz101-san-gsw4:fc3/48
+
+Sample Input ($raw):
+
+     MDS: oz101-san-ew7
+     fc1/1 sfp is present
+         Name is CISCO-FINISAR
+         Manufacturer's part number is FTLF8529P3BCV-CS
+         Revision is A
+         Serial number is FNS174015QA
+         Cisco part number is 10-2666-01                                              <=== {"PN 10-2666-01":       compatible}
+         Cisco pid is DS-SFP-FC16G-SW                                                 <=== {"PID DS-SFP-FC16G-SW": compatible}
+         FC Transmitter type is short wave laser w/o OFC (SN)
+         FC Transmitter supports short distance link length
+         Transmission medium is multimode laser with 62.5 um aperture (M6)
+         Supported speeds are - Min speed: 4000 Mb/s, Max speed: 16000 Mb/s           <=== {Range: 4000-16000 Mb/s}
+         Nominal bit rate is 14000 Mb/s
+         Link length supported for 50/125um OM2 fiber is 35 m
+         Link length supported for 62.5/125um fiber is 15 m
+         Link length supported for 50/125um OM3 fiber is 100 m
+         Cisco extended id is unknown (0x0)
+
+         No tx fault, no rx loss, in sync state, diagnostic monitoring type is 0x68
+         SFP Diagnostics Information:
+     ----------------------------------------------------------------------------
+                                          Alarms                  Warnings
+                                     High        Low         High          Low
+     ----------------------------------------------------------------------------
+       Temperature   32.10 C         75.00 C     -5.00 C     70.00 C        0.00 C
+       Voltage        3.30 V          3.63 V      2.97 V      3.46 V        3.13 V
+       Current        7.78 mA        11.80 mA     4.00 mA    10.80 mA       5.00 mA
+       Tx Power      -2.06 dBm        1.70 dBm  -13.00 dBm   -1.30 dBm     -9.00 dBm
+       Rx Power      -1.95 dBm        3.00 dBm  -15.90 dBm    0.00 dBm    -11.90 dBm
+       Transmit Fault Count = 0
+     ----------------------------------------------------------------------------
+       Note: ++  high-alarm; +  high-warning; --  low-alarm; -  low-warning
+
+     <...>
+
+     MDS: oz101-san-ew8
+     fc1/12 sfp is present
+         Name is CISCO-FINISAR
+         Manufacturer's part number is FTLF8524P2BNL-C2
+         Revision is B
+         Serial number is FNS112309N8
+         Cisco part number is 10-2195-01                                              <=== {"PN 10-2195-01":      replace}
+         Cisco pid is DS-SFP-FC4G-SW                                                  <=== {"PID DS-SFP-FC4G-SW": replace}
+         FC Transmitter type is short wave laser w/o OFC (SN)
+         FC Transmitter supports intermediate distance link length
+         Transmission medium is multimode laser with 62.5 um aperture (M6)
+         Supported speeds are - Min speed: 1000 Mb/s, Max speed: 4000 Mb/s            <=== {Range: 1000-4000 Mb/s}
+         Nominal bit rate is 4300 Mb/s
+         Cisco extended id is unknown (0x0)
+
+         No tx fault, rx loss, no sync exists, diagnostic monitoring type is 0x68
+         SFP Diagnostics Information:
+     ----------------------------------------------------------------------------
+                                          Alarms                  Warnings
+                                     High        Low         High          Low
+     ----------------------------------------------------------------------------
+       Temperature   31.04 C         89.00 C     -9.00 C     85.00 C       -5.00 C
+       Voltage        3.30 V          3.60 V      3.00 V      3.50 V        3.10 V
+       Current        0.00 mA  --    17.00 mA     1.00 mA    14.00 mA       2.00 mA
+       Tx Power         N/A       --     1.00 dBm  -13.50 dBm   -3.00 dBm     -9.50 dBm
+       Rx Power     N/A      --     4.00 dBm  -21.02 dBm    0.00 dBm    -16.99 dBm
+       Transmit Fault Count = 0
+     ----------------------------------------------------------------------------
+       Note: ++  high-alarm; +  high-warning; --  low-alarm; -  low-warning
+
+     <...>
+
+     fc3/16 sfp is present
+         Name is CISCO-FINISAR
+         Manufacturer's part number is FTRJ8519P1BNL-CS
+         Revision is A
+         Serial number is FNS0807K0P4
+         Cisco part number is                                                         <=== {Cisco PN: not specified}
+         Cisco pid is                                                                 <=== {Cisco PID: not specified}
+         FC Transmitter type is short wave laser w/o OFC (SN)
+         FC Transmitter supports intermediate distance link length
+         Transmission medium is multimode laser with 62.5 um aperture (M6)
+         Supported speeds are - Min speed: 1000 Mb/s, Max speed: 2000 Mb/s            <=== {Range: 1000-2000 Mb/s}
+         Nominal bit rate is 2100 Mb/s
+         Cisco extended id is unknown (0x0)
+
+         No tx fault, rx loss, no sync exists, diagnostic monitoring type is 0x88
+
+     <...>
