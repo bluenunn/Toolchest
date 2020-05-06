@@ -1,4 +1,4 @@
-# Github Toolchest repository for audit/config procedures, templates and utilities that streamline support of mission critical IT Data Base, Hosting, Network & Storage environments.
+# Github Toolchest repository for audit/config procedures, templates and utilities that streamline support of mission critical IT Data Base, Hosting, Network and Storage environments.
 
 Platforms: EMC (VMAX & Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array), Cisco (MDS & UCS), Oracle and VDBench.
 
