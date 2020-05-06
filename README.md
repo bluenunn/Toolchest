@@ -8,9 +8,9 @@ GitHub Repository:  https://github.com/bluenunn/Toolchest/
 
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
-dataextr_r010_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
+dataextr_r011_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
 
-dataextr_r010_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
+dataextr_r011_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
 dirlilst_r004.txt - Audit EMC [PV]MAX frontend FAs (Fibre Adapters).  Returns FA WWPNs & related Director Bit settings.
 
