@@ -10,7 +10,7 @@ dataextr_r011_(docs_v01).txt - Create customized reports from raw character deli
 
 dataextr_r011_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
-dirlilst_r004.txt - Audit EMC [PV]MAX frontend FAs (Fibre Adapters).  Returns FA WWPNs & related Director Bit settings.
+dirlist_r004.txt - Audit EMC [PV]MAX frontend FAs (Fibre Adapters).  Returns FA WWPNs & related Director Bit settings.
 
 esxcfg-mpath_format_proc_r001.txt - Formats VMWare ESXi host "esxcfg-mpath -L" command output.
 
