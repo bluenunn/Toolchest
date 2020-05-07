@@ -1,6 +1,6 @@
 # Github Toolchest repository: "audit/config" procedures, templates & utilities to streamline support of mission critical Data Base, Hosting, Network & Storage environments.
 
-Platforms: RHEL, EMC (VMAX, Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array), Cisco (MDS & UCS), Oracle, VDBench.
+Platforms: Oracle, RHEL, Cisco (MDS & UCS), EMC (VMAX, Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array), VDBench
 
 *Note: Each of the procedures, templates & utilities inside this repository are internally documented.
 
