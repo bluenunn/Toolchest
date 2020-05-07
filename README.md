@@ -4,8 +4,6 @@ Platforms: RHEL, EMC (VMAX, Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Ar
 
 *Note: Each of the procedures, templates & utilities inside this repository are internally documented.
 
-GitHub Repository:  https://github.com/bluenunn/Toolchest/
-
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
 dataextr_r011_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
