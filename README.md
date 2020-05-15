@@ -6,7 +6,7 @@ Platforms: Oracle, RHEL, Cisco (MDS & UCS), EMC (VMAX, Powermax), Netapp (A800, 
 
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
-dataextr_r012_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
+dataextr_r012_(docs_v02).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
 
 dataextr_r012_(readme_v02).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
