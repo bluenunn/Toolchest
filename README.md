@@ -8,7 +8,7 @@ asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Gr
 
 dataextr_r012_(docs_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).   {demo avail}
 
-dataextr_r012_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
+dataextr_r012_(readme_v02).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
 dataextr_r012_(rows_wine_equ_3k).txt - Sample Wine Industry Review raw data ("=" delimited), see DataExtr "readme" file.
 
