@@ -10,7 +10,7 @@ dataextr_r012_(docs_v01).txt - Create customized reports from raw character deli
 
 dataextr_r012_(readme_v01).txt - Create customized reports from raw character delimited data sources (ex: CSV files).
 
-dataextr_r012_(rows_wine_equ_3k).txt - Sample Wine Industry Review raw data ("=" delimited), see DataExtr "readme" file.
+dataextr_r012_(rows_wine_equ_3k).txt - Sample raw Wine Industry Review data ("=" delimited), see DataExtr "readme" file.
 
 dirlist_r004.txt - Audit EMC [PV]MAX frontend FAs (Fibre Adapters).  Returns FA WWPNs & related Director Bit settings.
 
