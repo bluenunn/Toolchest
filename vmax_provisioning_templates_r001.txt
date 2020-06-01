@@ -1,0 +1,282 @@
+
+File: vmax_provisioning_templates_r001.txt            {Modified: 06/01/20, Created: 11/13/18}
+
+Overview:
+
+     Templates may be used to provision block storage for Dell-EMC Powermax & VMAX storage arrays.
+
+VMAX PMR Provisioning Template Index:
+
+     - <VMAX Provisioning Template: PMR_add>          {Add LUNs to existing VMAX PMR (Port Mask Record)}
+
+     - <VMAX Provisioning Template: PMR_new>          {Create new VMAX PMR, incl. Appendix: Zone/Mask "examples/commands"}
+
+<VMAX Provisioning Template: PMR_add>
+
+     #!/bin/ksh
+
+     # File: vmax_pmr_add_template_(rhel_lnxdb-svl-24_vmax100K_01695)_r001.txt     {Modified: 11/13/18, Created: 11/13/18}
+
+     # Tailor "$title":                         {Optional: more detailed description of VMAX masking job if desired}
+
+          # title="Add 8 x GKs (Gatekeepers) to existing PMR (Port Mask Record), VMAX100K_01695 for physical RHEL lnxdb-svl-24."
+
+     # Tailor VMAX LUN Masking Variables:
+
+          # Define VMAX SID (Symmetrix ID):     {samp_var(s): "sid=000196801695" (VMAX100K_01695, full SN: 000196801695)}
+
+               sid=
+
+          # Define Host & IG [v]HBA var(s):     {samp_var(s): "host=lnxdb-svl-24; hba0=hba0; wwpn0=200b07000000005e"}
+
+              # *Note: Use "hbalist" (repo: http://wwwin-people.cisco.com/bnunn/tools) to audit Unix style host [v]HBAs}
+
+               host=
+
+          # Define SG var(s):                   {samp_var(s): "sg01_lbl=SG_${host}; sg01_dvs=00100:00103,00204:00207"}
+
+               sg01_lbl=
+               sg01_dvs=
+
+     # "Tailor/Run" VMAX LUN Masking Job:       {Tailoring may not be needed below if no additional variables are added to section above}
+
+          # Set "$sudo" variable:               {root: sudo=""; <non-root>: sudo="sudo"}
+
+               id=$(id | awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')     # {Determine user id ("root" versus "<non-root>")}
+
+               if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                 # {Set "$sudo" ("root": sudo=""; "<non-root>": sudo="sudo")}
+
+              # *Note: sudo="sudo" only works for "<non-root>" users with EMC SYMCLI "sudo" rights on host running VMAX LUN masking job.
+
+          # Export EMC VMAX Solutions Enabler (aka SYMCLI) path:
+
+               export PATH=$PATH:/usr/symcli/bin
+
+          # Backup "Pre" VMAX ACLX (Access Control LogiX) DB:
+
+               date=$(date '+%Y-%m-%d_%H.%M.%S')
+               backup_dir=/var/symcli/backups
+               aclxdb=${backup_dir}/aclxdb_${sid}_${date}
+
+               if [[ ! -d $backup_dir ]]; then $sudo mkdir -p $backup_dir;fi
+
+               $sudo symaccess -sid $sid backup -file ${aclxdb}_pre -noprompt
+
+          # Update SG:
+
+               $sudo symsg -sid $sid -sg $sg01_lbl addall devs -devs $sg01_dvs
+
+              # *Note: Alternative "symsg ... addall devs -file <symdev_file>" syntax for TDEVs in a single column file:
+
+                   # sg01_fil=/tmp/${sid}_tdevs_add; $sudo symsg -sid $sid -sg $sg01_lbl addall devs -file $sg01_fil
+
+          # Backup "Post" VMAX ACLX (Access Control LogiX) DB:
+
+               $sudo symaccess -sid $sid backup -file ${aclxdb}_post -noprompt
+
+          # Scan new LUNs on physical RHEL server:     # {host LUN scan must be run as "root"}
+
+               # for host in $(ls /sys/class/fc_host);do echo "- - -" > /sys/class/scsi_host/${host}/scan;sleep 3;done
+
+          # Scan new LUNs on ESXi server:
+
+               # <VMware team performs host storage scans for ESX farms>
+
+          # Sync up VMAX SYMAPI_DB:
+
+               # $sudo symcfg discover
+
+<VMAX Provisioning Template: PMR_new>
+
+     #!/bin/ksh
+
+     # File: vmax_pmr_new_template_(rhel_lnxdb-svl-24_vmax100K_01695)_r001.txt     {Modified: 11/13/18, Created: 11/07/18}
+
+          # Note: Appendix contains related "zoning/masking" commands & topics.
+
+     # Tailor "$title":                         {Optional: more detailed description of VMAX masking job if desired}
+
+          # title="Create new PMR (Port Mask Record) on VMAX100K_01695 to provision 8 x GKs for physical RHEL host lnxdb-svl-24."
+
+     # Tailor VMAX LUN Masking Variables:
+
+          # Define VMAX SID (Symmetrix ID):     {samp_var(s): "sid=000196801695" (VMAX100K_01695, full SN: 000196801695)}
+
+               sid=
+
+          # Define Host & IG [v]HBA var(s):     {samp_var(s): "host=lnxdb-svl-24; hba0=hba0; wwpn0=200b07000000005e"}
+
+              # *Note: Use "hbalist" (repo: http://wwwin-people.cisco.com/bnunn/tools) to audit Unix style host [v]HBAs}
+
+               host=
+
+               hba0=
+               hba1=
+               hba2=
+               hba3=
+
+               wwpn0=
+               wwpn1=
+               wwpn2=
+               wwpn3=
+
+          # Define IG var(s):                   {samp_var(s): "ig01_lbl=IG_${host}"}
+
+               ig01_lbl=
+
+          # Define PG var(s):                   {samp_var(s): "pg01_lbl=PG_01695-1D24-1D25-2D24-2D25; pg01_pts=1d:24,1d:25,2d:24,2d:25"}
+
+               pg01_lbl=
+               pg01_pts=
+
+          # Define SG var(s):                   {samp_var(s): "sg01_lbl=SG_${host}; sg01_dvs=00100:00103,00204:00207"}
+
+               sg01_lbl=
+               sg01_dvs=
+
+          # Define MV var(s):                   {samp_var(s): "mv01_lbl=MV_${host}"}
+
+               mv01_lbl=
+
+     # "Tailor/Run" VMAX LUN Masking Job:       {Tailoring may not be needed below if no additional variables are added to section above}
+
+          # Set "$sudo" variable:               {root: sudo=""; <non-root>: sudo="sudo"}
+
+               id=$(id | awk '{print substr($1,index($1,"(")+1,index($1,")")-index($1,"(")-1)}')     # {Determine user id ("root" versus "<non-root>")}
+
+               if [[ $id = root ]]; then sudo="";else sudo="sudo";fi                                 # {Set "$sudo" ("root": sudo=""; "<non-root>": sudo="sudo")}
+
+              # *Note: sudo="sudo" only works for "<non-root>" users with EMC SYMCLI "sudo" rights on host running VMAX LUN masking job.
+
+          # Export EMC VMAX Solutions Enabler (aka SYMCLI) path:
+
+               export PATH=$PATH:/usr/symcli/bin
+
+          # Backup "Pre" VMAX ACLX (Access Control LogiX) DB:
+
+               date=$(date '+%Y-%m-%d_%H.%M.%S')
+               backup_dir=/var/symcli/backups
+               aclxdb=${backup_dir}/aclxdb_${sid}_${date}
+
+               if [[ ! -d $backup_dir ]]; then $sudo mkdir -p $backup_dir;fi
+
+               $sudo symaccess -sid $sid backup -file ${aclxdb}_pre -noprompt
+
+          # Label host [v]HBAs:
+
+               $sudo symaccess -sid $sid rename -wwn $wwpn0 -alias ${host}/${hba0}
+               $sudo symaccess -sid $sid rename -wwn $wwpn1 -alias ${host}/${hba1}
+               $sudo symaccess -sid $sid rename -wwn $wwpn2 -alias ${host}/${hba2}
+               $sudo symaccess -sid $sid rename -wwn $wwpn3 -alias ${host}/${hba3}
+
+          # Create IG:
+
+               $sudo symaccess -sid $sid -name $ig01_lbl -type initiator create -consistent_lun
+
+               $sudo symaccess -sid $sid -name $ig01_lbl -type initiator add -wwn $wwpn0
+               $sudo symaccess -sid $sid -name $ig01_lbl -type initiator add -wwn $wwpn1
+               $sudo symaccess -sid $sid -name $ig01_lbl -type initiator add -wwn $wwpn2
+               $sudo symaccess -sid $sid -name $ig01_lbl -type initiator add -wwn $wwpn3
+
+          # Create PG:
+
+               $sudo symaccess -sid $sid create -name $pg01_lbl -type port -dirport $pg01_pts
+
+          # Create SG:     {Optional: "-srp srp_1" may be removed if no optimization ("comp/dedup") is desired for "VMAX_AFA/PMAX"}
+
+               $sudo symsg -sid $sid create $sg01_lbl -srp srp_1
+
+               $sudo symsg -sid $sid -sg $sg01_lbl addall devs -devs $sg01_dvs
+
+              # *Note: Alternative "symsg ... addall devs -file <symdev_file>" syntax for TDEVs in a single column file:
+
+                   # sg01_fil=/tmp/${sid}_tdevs_add; $sudo symsg -sid $sid -sg $sg01_lbl addall devs -file $sg01_fil
+
+          # Create MV:
+
+               symaccess -sid $sid create view -name $mv01_lbl -ig $ig01_lbl -pg $pg01_lbl -sg $sg01_lbl
+
+          # Backup "Post" VMAX ACLX (Access Control LogiX) DB:
+
+               $sudo symaccess -sid $sid backup -file ${aclxdb}_post -noprompt
+
+          # Scan new LUNs on physical RHEL server:     # {host LUN scan must be run as "root"}
+
+               # for host in $(ls /sys/class/fc_host);do echo "- - -" > /sys/class/scsi_host/${host}/scan;sleep 3;done
+
+          # Scan new LUNs on ESXi server:
+
+               # <VMware team performs host storage scans for ESX farms>
+
+          # Sync up VMAX SYMAPI_DB:
+
+               # $sudo symcfg discover
+
+     #==============================================================================================================================#
+
+     # Appendix:
+
+          # Appendix Topic Summary:
+
+               # A01) - Sample Zone defs related to job template
+               # A02) - Sample VMAX Symdev (aka TDEV) creation syntax
+               # A03) - Sample "symdev show" syntax (detailed TDEV cfg data)
+               # A04) - Sample VMAX PMR (Port Mask Record) MV (Masking View) summary
+               # A05) - Sample "symaccess/symsg" "list/show" syntax (use to verify job results)
+
+          # A01) Sample Zone defs related to job template:     {"<hban>" (n=0-3) ordered by VSAN pair (ex: VSANs 100/101)}
+
+               # zone name lnxdb-svl-24_hba0 vsan 100                                                <= Fabric_1 (VSAN 100)
+               # * fcid 0x660249 [pwwn 200b07000000005e] [lnxdb-svl-24-vhba1]
+               # * fcid 0x6714a0 [pwwn 50000973581a7c18] [sjc12-cc28-vmax-695-dir1_a8-0_1d24]
+
+               # zone name lnxdb-svl-24_hba1 vsan 101                                                <= Fabric_2 (VSAN 101)
+               # * fcid 0xca03cd [pwwn 200b07000000004e] [lnxdb-svl-24-vhba2]
+               # * fcid 0xcb1660 [pwwn 50000973581a7c19] [sjc12-cc28-vmax-695-dir1_a8-1_1d25]
+
+               # zone name lnxdb-svl-24_1_hba2 vsan 100                                              <= Fabric_1 (VSAN 100)
+               # * fcid 0x66024a [pwwn 200b07000000007e] [lnxdb-svl-24-vhba3]
+               # * fcid 0x671380 [pwwn 50000973581a7c58] [sjc12-cc28-vmax-695-dir2_b8-0_2d24]
+
+               # zone name lnxdb-svl-24_hba3 vsan 101                                                <= Fabric_2 (VSAN 101)
+               # * fcid 0xca03ce [pwwn 200b07000000006e] [lnxdb-svl-24-vhba4]
+               # * fcid 0xcb1540 [pwwn 50000973581a7c59] [sjc12-cc28-vmax-695-dir2_b8-1_2d25]
+
+          # A02) Sample VMAX Symdev (aka TDEV) creation syntax:                               {GK (GateKeeper): "size=3 cyl"}
+
+               # $sudo symconfigure -sid $sid -cmd "create dev count=8, config=TDEV, emulation=FBA, size=3 cyl;" commit -v -nop
+
+          # A03) Sample "symdev show" syntax (detailed TDEV cfg data):                        {Incl. "int/ext" <LUNID>s, <size: Cyl, MB, ...>, ...")}
+
+               # symdev=00100; $sudo symdev -sid $sid show $symdev > /tmp/${sid}_${symdev}
+
+          # A04) Sample VMAX PMR (Port Mask Record) MV (Masking View) summary:                {Masking View created by this job}
+
+               # Masking View Name     : MV_lnxdb-svl-24
+               # Initiator Group Name  : IG_lnxdb-svl-24
+               # Port Group Name       : PG_01695-1D24-2D24-1D25-2D25
+               # Storage Group Name    : SG_lnxdb-svl-24
+
+          # A05) Sample "symaccess/symsg" "list/show" syntax:                                 {Verify VMAX PMR masking definitions}
+
+               # HP:  $sudo symaccess -h > /tmp/symaccess-h                                 # {HP: HelP, "symaccess" command syntax}
+               # HP:  $sudo symsg     -h > /tmp/symsg-h                                     # {HP: HelP, "symsg"     command syntax}
+
+               # DB:  $sudo symaccess -sid $sid list devinfo > /tmp/${sid}_devinfo          # {DB: Capture "entire" VMAX masking ACLXDB}
+
+               # MV:  $sudo symaccess -sid $sid list view -v
+               # MV:  $sudo symaccess -sid $sid list view -v -name MV_lnxdb-svl-24
+
+               # IG:  $sudo symaccess -sid $sid list -type initiator
+               # IG:  $sudo symaccess -sid $sid -type initiator -detail show IG_lnxdb-svl-24
+
+               # PG:  $sudo symaccess -sid $sid list -type port
+               # PG:  $sudo symaccess -sid $sid -type port show PG_01695-1D24-1D25-2D24-2D25
+
+               # SG:  $sudo symaccess -sid $sid list -type storage
+               # SG:  $sudo symaccess -sid $sid list -type storage -detail                  # {SG: "parent|child|N/A" flags}
+               # SG:  $sudo symaccess -sid $sid list -type storage -detail -v
+               # SG:  $sudo symaccess -sid $sid list -type storage -detail -v -name SG_lnxdb-svl-24
+               # SG:  $sudo symaccess -sid $sid -type storage show SG_lnxdb-svl-24
+
+               # SG:  $sudo symsg -sid $sid show SG_lnxdb-svl-24                            # {SG: "opt ("comp/dedup") & Host I/O limit ("[MB|IO]/sec") info}
