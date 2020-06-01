@@ -35,3 +35,5 @@ srm_mon_r003.txt - SRM (Site Recovery Manager) SRDF monitor within a metro area 
 vdblist_utility_&_templates_r005.zip - VDBench Storage Perf Benchmark utility & templates (supports "side_by_side" graphs).
 
 vmax_audit_r006.txt - Audits EMC [PV]MAX (single line "Config, Pool, Efficiency, Provision & Subscription" data per array). 
+
+vmax_provisioning_templates_r001.txt - Use templates to provision block storage for Dell-EMC Powermax & VMAX storage arrays.
