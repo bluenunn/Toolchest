@@ -6,7 +6,7 @@ Platforms: Oracle, RHEL, Cisco (MDS & UCS), EMC (VMAX, Powermax), Netapp (A800, 
 
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
-dataextr_r013_(v03).zip - "Docs, Readme": Create customized reports from raw data sources (ex: CSV files).  {demo avail}
+dataextr_r014_(v01).zip - "Docs, Readme": Create customized reports from raw data sources (ex: CSV files).  {demo avail}
 
 dirlist_r004.txt - Audit EMC [PV]MAX frontend FAs (Fibre Adapters).  Returns FA WWPNs & related Director Bit settings.
 
