@@ -14,6 +14,8 @@ esxcfg-mpath_format_proc_r001.txt - Formats VMWare ESXi host "esxcfg-mpath -L" c
 
 hbalist_r006.txt - Audit server [v]HBA ([virtual] Host Bus Adapters).  Supports physical RHEL, HP/UX & Solaris servers.
 
+how_to_procs_r001.zip - various "How To" procedures, utilities, templates (ex: replies to Daniweb, StackOverflow, ...)
+
 magic_rings_lunid_decode_encode_proc_r004.txt - Audit IEEE Format_6 external LUNIDs for EMC [PV]MAX & Netapp SAN.
 
 mds_fc_tran_det_proc_r002.txt - verify compatibility of MDS FC SFPs (returns Cisco/OEM PNs & supported throughput range). 
