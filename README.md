@@ -4,6 +4,8 @@ Platforms: Oracle, RHEL, Cisco (MDS & UCS), EMC (VMAX, Powermax), Netapp (A800, 
 
 *Note: Each of the procedures, templates & utilities inside this repository are internally documented.
 
+TDMF_Over_Distance_white_paper.zip - Host based storage migrations over distance using Transparent Data Migration Facility.
+
 asmlist_r003.txt - Audit Oracle block storage envs (correlates ASM Instances, Groups & Disks with backend storage arrays).
 
 dataextr_r015_(v01).zip - "Docs, Readme": Create customized reports from raw data sources (ex: CSV files).  {demo avail}
