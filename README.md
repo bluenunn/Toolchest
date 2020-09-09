@@ -1,4 +1,4 @@
-# Github Toolchest repository: "audit/config" procedures, templates & utilities to streamline support of mission critical IT infrastructure environments (Data Base, Hosting, Network & Storage).  Click or download any repository item to obtain its full set of documentation.
+# Github Toolchest repository: "audit/config" procedures, templates & utilities to streamline support of mission critical IT infrastructure environments (Oracle, Hosting, Network & Storage).  Click or download any repository item to obtain its full set of documentation.
 
 Platforms: Oracle, RHEL, Cisco (MDS & UCS), EMC (VMAX, Powermax), Netapp (A800, A700, 8xxx), Pure (Flash Array), VDBench
 
